@@ -542,6 +542,11 @@ async function manejarTexto(telefono, sesion, texto) {
     sesion.paso = "menu";
     if (cliente?.encontrado) {
       sesion.datos.clienteIdentificado = cliente;
+      // Se borra lo que se hayan hablado antes de identificarse: ya se sabe
+      // quien es y en que plan esta, que es lo que importa. Cargar historial
+      // viejo solo gasta creditos sin sumar nada -pedido de Serling el
+      // 12-09-2026-. La conversacion sobre su necesidad de HOY arranca limpia.
+      sesion.historial = [];
       const primerNombre = cliente.nombre?.split(" ")[0] || "";
       return textoA(telefono, `Listo${primerNombre ? ", " + primerNombre : ""} 👋 Ya te ubiqué. ¿En qué te ayudo?`);
     }

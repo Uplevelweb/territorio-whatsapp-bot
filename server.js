@@ -213,7 +213,12 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   }
 
   if (id === "duda_precio") {
-    await textoA(telefono, "Tenemos 3 planes: Inicio $19.990/mes, Plus $49.990/mes (el más contratado) y Premium a convenir. Los 7 primeros días son gratis, sin tarjeta.");
+    await textoA(telefono,
+      "Tenemos 3 planes:\n\n" +
+      "• *Inicio* — $19.990/mes\n" +
+      "• *Plus* — $49.990/mes (el más contratado)\n" +
+      "• *Premium* — a convenir\n\n" +
+      "Los 7 primeros días son gratis, sin tarjeta.");
     return menuPrincipal(telefono);
   }
 

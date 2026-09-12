@@ -113,6 +113,16 @@ function imagenA(telefono, url, texto) {
 }
 
 function listaA(telefono, texto, opciones) {
+  // WhatsApp rechaza el mensaje ENTERO si un titulo pasa los 24 caracteres
+  // -paso el 11-09-2026 con "Ver resumen de Territorio" (26) y la lista
+  // completa dejo de mandarse sin que se notara desde afuera-. Se avisa
+  // fuerte en los registros para pillarlo apenas se agregue una opcion.
+  opciones.forEach(o => {
+    if (o.titulo.length > 24) {
+      console.error(`⚠️ Titulo de lista demasiado largo (${o.titulo.length}/24): "${o.titulo}" — el mensaje completo va a fallar.`);
+    }
+  });
+
   return enviar({
     to: telefono,
     type: "interactive",
@@ -236,7 +246,7 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
       { id: "duda_precio", titulo: "Precio" },
       { id: "duda_turnos", titulo: "Cómo llegan las alertas" },
       { id: "duda_convenio", titulo: "Convenio Marco" },
-      { id: "ver_resumen", titulo: "Ver resumen de Territorio" },
+      { id: "ver_resumen", titulo: "Resumen de Territorio" },
       { id: "ver_ejemplo", titulo: "Así se ve el correo" },
     ]);
   }

@@ -235,6 +235,31 @@ async function notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto)
   }
 }
 
+// Busca a quien dice "Ya soy cliente" por su RUT o su correo -acepta el RUT
+// con o sin puntos y guion-. Devuelve si existe, su nombre, su plan y su
+// hora de envio. El plan hay que asignarlo a mano en Supabase (todavia no
+// hay cobro automatico), asi que puede venir vacio aunque la persona sea
+// una clienta real de la prueba gratis. Pedido de Serling el 12-09-2026.
+async function identificarCliente(identificador) {
+  try {
+    const respuesta = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_identificar_cliente`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_CLAVE_PUBLICA,
+        "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ p_identificador: identificador }),
+    });
+    if (!respuesta.ok) return null;
+    const filas = await respuesta.json(); // la funcion devuelve una tabla: llega como array
+    return filas?.[0] || null;
+  } catch (error) {
+    console.error("No se pudo identificar al cliente:", error);
+    return null;
+  }
+}
+
 // --- Capa de IA conversacional ------------------------------------------------
 // Para cualquier mensaje de texto libre que no sea "hola"/"menu" ni parte del
 // llenado de datos paso a paso (ver mas abajo). No reemplaza los botones -
@@ -335,7 +360,7 @@ const HERRAMIENTAS_IA = [
   },
 ];
 
-async function llamarClaude(historial) {
+async function llamarClaude(historial, manual) {
   const respuesta = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -346,7 +371,7 @@ async function llamarClaude(historial) {
     body: JSON.stringify({
       model: MODELO_IA,
       max_tokens: 500,
-      system: MANUAL_TERRITORIO,
+      system: manual,
       tools: HERRAMIENTAS_IA,
       messages: historial,
     }),
@@ -368,11 +393,31 @@ function recortarHistorial(historial) {
   return recorte;
 }
 
+// Si ya se identifico al cliente ("Ya soy cliente" + RUT/correo), se le suma
+// al manual una nota con su nombre y su plan, para que la IA aplique las
+// reglas de soporte que le corresponden (Inicio: por correo o pagando la
+// hora; Plus/Premium: WhatsApp directo) sin tener que volver a preguntarle
+// quien es en cada mensaje.
+function manualPara(sesion) {
+  const cliente = sesion.datos?.clienteIdentificado;
+  if (!cliente) return MANUAL_TERRITORIO;
+  const plan = cliente.plan || "sin plan pagado (prueba gratis o ninguno)";
+  return `${MANUAL_TERRITORIO}
+
+NOTA SOBRE ESTE CLIENTE (ya se identifico, no se lo vuelvas a pedir):
+Nombre: ${cliente.nombre || "no registrado"}. Plan actual: ${plan}.
+Aplica las reglas de soporte de ESE plan: si es Inicio o no tiene plan
+pagado, su soporte incluido es por correo (y puede agendar una hora de
+Atencion Personalizada a $24.990 si quiere hablar con alguien); si es Plus
+o Premium, puede escribir sus dudas libremente y usar derivar_a_humano sin
+problema.`.trim();
+}
+
 async function responderConIA(telefono, sesion, textoUsuario) {
   sesion.historial.push({ role: "user", content: textoUsuario });
 
   for (let vuelta = 0; vuelta < 3; vuelta++) {
-    const resultado = await llamarClaude(sesion.historial);
+    const resultado = await llamarClaude(sesion.historial, manualPara(sesion));
     if (!resultado) {
       return textoA(telefono, "Se me cayó la conexión un segundo 🙈 ¿puedes repetir lo último que escribiste?");
     }
@@ -488,6 +533,21 @@ async function manejarTexto(telefono, sesion, texto) {
     return textoA(telefono, "Elige 8:00 o 15:00, tocando uno de los botones de arriba.");
   }
 
+  // "Ya soy cliente" -> busca por RUT o correo en Supabase. Si lo encuentra,
+  // queda identificado para el resto de la conversacion (la IA ya sabe su
+  // nombre y su plan, ver manualPara()); si no, se lo dice y sigue como
+  // conversacion libre igual, sin trabar al cliente.
+  if (sesion.paso === "pedir_identificador_cliente") {
+    const cliente = await identificarCliente(texto.trim());
+    sesion.paso = "menu";
+    if (cliente?.encontrado) {
+      sesion.datos.clienteIdentificado = cliente;
+      const primerNombre = cliente.nombre?.split(" ")[0] || "";
+      return textoA(telefono, `Listo${primerNombre ? ", " + primerNombre : ""} 👋 Ya te ubiqué. ¿En qué te ayudo?`);
+    }
+    return textoA(telefono, "No encontré ese dato en el sistema 🤔 ¿Puedes revisarlo y escribirlo de nuevo? Si el problema sigue, cuéntame qué necesitas igual y avisamos al equipo.");
+  }
+
   // Fuera de un paso reconocido: vuelve al menu en vez de quedarse mudo.
   return menuPrincipal(telefono);
 }
@@ -560,7 +620,8 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   }
 
   if (id === "ya_soy_cliente") {
-    return textoA(telefono, "👋 Perfecto. Escríbeme en qué te ayudo, o si quieres subir de plan me lo dices directo y coordinamos el cambio.");
+    sesion.paso = "pedir_identificador_cliente";
+    return textoA(telefono, "👋 Perfecto. Pásame tu RUT o el correo con el que te inscribiste, para ubicarte en el sistema.");
   }
 
   if (id === "hora_8") return confirmarInscripcion(telefono, sesion, 8);

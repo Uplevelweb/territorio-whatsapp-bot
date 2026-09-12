@@ -44,17 +44,58 @@ const URL_BASE = URL_PUBLICA || "https://territorio-whatsapp-bot.onrender.com";
 const GRAPH_URL = `https://graph.facebook.com/v20.0/${META_PHONE_NUMBER_ID}/messages`;
 
 // --- Estado de cada conversacion ------------------------------------------
-// Guardado en memoria: alcanza para el volumen que va a recibir un bot que
-// recien parte. Si el servidor se reinicia, la gente a mitad de conversacion
-// tiene que volver a escribir "hola" — no es grave, y evita meter una tabla
-// mas en Supabase antes de saber si el bot realmente se usa.
-const sesiones = new Map(); // telefono -> { paso, datos: {...} }
+// En memoria como cache rapida (para no ir a Supabase en cada mensaje), pero
+// respaldado en la tabla bot_conversaciones -pedido de Serling el 12-09-2026-:
+// Render (plan gratis) apaga el servidor tras un rato sin uso y la memoria se
+// borra entera; sin este respaldo, cada reinicio le hacia perder al cliente
+// su conversacion Y le borraba la bandera de "derivado a un humano" sin que
+// nadie se enterara.
+const sesiones = new Map(); // telefono -> { paso, datos: {...}, historial: [...] }
 
-function sesionDe(telefono) {
-  if (!sesiones.has(telefono)) {
-    sesiones.set(telefono, { paso: "menu", datos: {}, historial: [] });
+async function guardarConversacion(telefono, sesion) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_guardar_conversacion`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_CLAVE_PUBLICA,
+        "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ p_telefono: telefono, p_estado: sesion }),
+    });
+  } catch (error) {
+    console.error(`No se pudo guardar la conversacion de ${telefono} en Supabase:`, error);
   }
-  return sesiones.get(telefono);
+}
+
+async function cargarConversacion(telefono) {
+  try {
+    const respuesta = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_leer_conversacion`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_CLAVE_PUBLICA,
+        "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ p_telefono: telefono }),
+    });
+    if (!respuesta.ok) return null;
+    return await respuesta.json(); // null si nunca se habia guardado
+  } catch (error) {
+    console.error(`No se pudo leer la conversacion de ${telefono} desde Supabase:`, error);
+    return null;
+  }
+}
+
+// Se llama UNA vez por mensaje entrante, al principio. Primero mira la
+// memoria (rapido); si no esta -recien reiniciado el servidor-, la busca en
+// Supabase antes de asumir que es alguien nuevo.
+async function sesionDe(telefono) {
+  if (sesiones.has(telefono)) return sesiones.get(telefono);
+  const guardada = await cargarConversacion(telefono);
+  const sesion = guardada || { paso: "menu", datos: {}, historial: [] };
+  sesiones.set(telefono, sesion);
+  return sesion;
 }
 
 // --- Enviar mensajes -------------------------------------------------------
@@ -171,6 +212,27 @@ async function inscribirAlerta(datos) {
     }),
   });
   return respuesta.ok;
+}
+
+// Respaldo de la derivacion a humano: deja el caso guardado en la tabla
+// bot_derivaciones (se puede revisar en Supabase aunque el WhatsApp de
+// aviso nunca haya llegado) y manda un correo, reusando la misma llave de
+// Resend que ya usa el correo de confirmacion -no hace falta ninguna clave
+// nueva en Render-. Pedido de Serling el 12-09-2026.
+async function notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_derivar`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_CLAVE_PUBLICA,
+        "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ p_telefono: telefono, p_motivo: motivo, p_resumen: resumen, p_contacto: contacto }),
+    });
+  } catch (error) {
+    console.error("No se pudo registrar/avisar la derivacion por correo:", error);
+  }
 }
 
 // --- Capa de IA conversacional ------------------------------------------------
@@ -333,12 +395,17 @@ async function responderConIA(telefono, sesion, textoUsuario) {
           salida = ok ? "Inscripcion exitosa." : "Fallo la inscripcion, avisale al cliente que lo intentemos de nuevo.";
         } else if (uso.name === "derivar_a_humano") {
           console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${uso.input.motivo} | Contacto: ${uso.input.contacto} | Resumen: ${uso.input.resumen}`);
+          // Dos avisos en paralelo, para que el prospecto nunca se pierda si
+          // uno de los dos falla: WhatsApp directo (rapido) + correo con
+          // respaldo en la tabla bot_derivaciones (permanente, se puede
+          // revisar despues aunque el WhatsApp nunca haya llegado).
           if (NUMERO_DERIVACION) {
             await textoA(NUMERO_DERIVACION,
               `🔔 *Derivar a humano*\nDe (WhatsApp): ${telefono}\nRUT/correo: ${uso.input.contacto}\nMotivo: ${uso.input.motivo}\nResumen: ${uso.input.resumen}`);
           } else {
             console.error("⚠️ NUMERO_DERIVACION no esta configurado: el aviso de derivacion no se pudo mandar.");
           }
+          await notificarDerivacionPorCorreo(telefono, uso.input.motivo, uso.input.resumen, uso.input.contacto);
           // Pausa la IA en esta conversacion: hasta que alguien la reactive
           // escribiendo "hola", el bot no vuelve a responder solo, para que
           // no se cruce con lo que conteste una persona del equipo.
@@ -529,7 +596,7 @@ app.post("/webhook", async (req, res) => {
     if (!mensaje) return; // puede ser un aviso de "mensaje leido", no un mensaje nuevo
 
     const telefono = mensaje.from;
-    const sesion = sesionDe(telefono);
+    const sesion = await sesionDe(telefono);
     console.log(`📩 Mensaje de ${telefono} (tipo: ${mensaje.type}, paso: ${sesion.paso})`);
 
     if (mensaje.type === "text") {
@@ -539,6 +606,11 @@ app.post("/webhook", async (req, res) => {
     } else {
       await textoA(telefono, "Por ahora solo entiendo texto y los botones de arriba 🙂");
     }
+
+    // Se guarda SIEMPRE al final, pase lo que pase arriba -asi la
+    // conversacion sobrevive si el servidor se reinicia antes del proximo
+    // mensaje, y la bandera de "derivado" queda a salvo tambien-.
+    await guardarConversacion(telefono, sesion);
   } catch (error) {
     console.error("Error procesando el mensaje:", error);
   }

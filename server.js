@@ -143,7 +143,7 @@ function menuPrincipal(telefono) {
     "Hola, somos Territorio 👋 Te avisamos cada mañana qué licitaciones y compras ágiles del Estado calzan con lo que vendes. ¿En qué te ayudamos?",
     [
       { id: "quiero_probar", titulo: "Quiero probar gratis" },
-      { id: "tengo_dudas", titulo: "Tengo dudas" },
+      { id: "tengo_dudas", titulo: "Conocer el sistema" },
       { id: "ya_soy_cliente", titulo: "Ya soy cliente" },
     ]);
 }

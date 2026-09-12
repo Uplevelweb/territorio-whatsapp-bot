@@ -242,49 +242,53 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   }
 
   if (id === "tengo_dudas") {
-    return listaA(telefono, "¿Sobre qué tienes dudas?", [
-      { id: "duda_precio", titulo: "Precio" },
-      { id: "duda_turnos", titulo: "Cómo llegan las alertas" },
-      { id: "duda_convenio", titulo: "Convenio Marco" },
-      { id: "ver_resumen", titulo: "Resumen de Territorio" },
-      { id: "ver_ejemplo", titulo: "Así se ve el correo" },
-    ]);
+    return listaA(telefono,
+      "Territorio 🧭 es tu radar de Mercado Público: filtra licitaciones, compras ágiles y Convenio Marco, y te avisa por correo solo lo que calza con lo que vendes.\n\n¿Qué te gustaría ver primero?",
+      [
+        { id: "ver_ejemplo", titulo: "Así se ve el correo" },
+        { id: "ver_resumen", titulo: "Resumen de Territorio" },
+        { id: "duda_precio", titulo: "Precio" },
+        { id: "duda_turnos", titulo: "Cómo llegan las alertas" },
+        { id: "duda_convenio", titulo: "Convenio Marco" },
+      ]);
   }
 
   if (id === "ver_resumen") {
     await documentoA(telefono, `${URL_BASE}/territorio-resumen.pdf`, "Territorio.pdf",
-      "Aquí tienes el resumen de una página: cómo funciona y los planes.");
+      "📄 El resumen de Territorio en una página: cómo funciona, paso a paso, y los 3 planes.");
     return menuPrincipal(telefono);
   }
 
   if (id === "ver_ejemplo") {
     await imagenA(telefono, `${URL_BASE}/asi-se-ve-el-correo.png`,
-      "Así se ve el correo que te llega cada día: la oportunidad que más calza, destacada, y el resto del día debajo.");
+      "📬 Así llega tu correo cada mañana: la oportunidad que más te calza, destacada arriba, y el resto del día debajo — con N° de proceso, fecha de publicación y de cierre.");
     return menuPrincipal(telefono);
   }
 
   if (id === "duda_precio") {
     await textoA(telefono,
-      "Tenemos 3 planes:\n\n" +
-      "• *Inicio* — $19.990/mes\n" +
-      "• *Plus* — $49.990/mes (el más contratado)\n" +
-      "• *Premium* — a convenir\n\n" +
-      "Los 7 primeros días son gratis, sin tarjeta.");
+      "💰 *Planes de Territorio*\n\n" +
+      "• *Inicio* — $19.990/mes _(oferta de lanzamiento)_\n" +
+      "• *Plus* — $49.990/mes _(el más contratado)_\n" +
+      "• *Premium* — a convenir _(equipos y volumen alto)_\n\n" +
+      "Los 7 primeros días de cualquier plan son gratis, sin tarjeta.");
     return menuPrincipal(telefono);
   }
 
   if (id === "duda_turnos") {
-    await textoA(telefono, "Las alertas llegan a tu correo dos veces al día: a las 8:00 y a las 15:00, de lunes a viernes.");
+    await textoA(telefono,
+      "🕗 Las alertas llegan a tu correo *dos veces al día*, de lunes a viernes: a las *8:00* y a las *15:00* — tú eliges el turno al inscribirte.");
     return menuPrincipal(telefono);
   }
 
   if (id === "duda_convenio") {
-    await textoA(telefono, "Cubrimos licitaciones, compras ágiles y también acciones comerciales de Convenio Marco, según las palabras clave que nos des.");
+    await textoA(telefono,
+      "🏛️ Territorio cubre licitaciones, compras ágiles *y* acciones comerciales de Convenio Marco — todo cruzado con las palabras clave que nos des, para que solo te llegue lo que realmente vendes.");
     return menuPrincipal(telefono);
   }
 
   if (id === "ya_soy_cliente") {
-    return textoA(telefono, "Perfecto. Escríbeme en qué te ayudo, o si quieres subir de plan me lo dices directo y coordinamos el cambio.");
+    return textoA(telefono, "👋 Perfecto. Escríbeme en qué te ayudo, o si quieres subir de plan me lo dices directo y coordinamos el cambio.");
   }
 
   if (id === "hora_8") return confirmarInscripcion(telefono, sesion, 8);

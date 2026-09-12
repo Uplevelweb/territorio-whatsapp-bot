@@ -21,6 +21,11 @@ const express = require("express");
 const app = express();
 app.use(express.json());
 
+// El resumen en PDF vive en /public y se manda por WhatsApp como archivo
+// (no un link a una pagina web) — pedido de Serling el 11-09-2026: un link
+// saca a la persona del chat, un archivo la mantiene adentro.
+app.use(express.static("public"));
+
 // --- Config --------------------------------------------------------------
 const {
   META_WHATSAPP_TOKEN,      // token de acceso permanente (System User)
@@ -28,8 +33,11 @@ const {
   META_VERIFY_TOKEN,        // palabra clave inventada por nosotros, para el paso de verificacion
   SUPABASE_URL,
   SUPABASE_CLAVE_PUBLICA,   // la MISMA clave publicable que usa inteligencia/index.html
+  URL_PUBLICA,              // la URL del propio bot en Render, para armar el link del PDF
   PORT,
 } = process.env;
+
+const URL_BASE = URL_PUBLICA || "https://territorio-whatsapp-bot.onrender.com";
 
 const GRAPH_URL = `https://graph.facebook.com/v20.0/${META_PHONE_NUMBER_ID}/messages`;
 
@@ -82,6 +90,16 @@ function botonesA(telefono, texto, botones) {
         })),
       },
     },
+  });
+}
+
+// Manda el resumen en PDF como archivo adjunto, no como link — así la
+// persona no sale de WhatsApp a un navegador para verlo.
+function documentoA(telefono, url, nombreArchivo, texto) {
+  return enviar({
+    to: telefono,
+    type: "document",
+    document: { link: url, filename: nombreArchivo, caption: texto },
   });
 }
 
@@ -209,7 +227,14 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
       { id: "duda_precio", titulo: "Precio" },
       { id: "duda_turnos", titulo: "Cómo llegan las alertas" },
       { id: "duda_convenio", titulo: "Convenio Marco" },
+      { id: "ver_resumen", titulo: "Ver resumen de Territorio" },
     ]);
+  }
+
+  if (id === "ver_resumen") {
+    await documentoA(telefono, `${URL_BASE}/territorio-resumen.pdf`, "Territorio.pdf",
+      "Aquí tienes el resumen de una página: cómo funciona y los planes.");
+    return menuPrincipal(telefono);
   }
 
   if (id === "duda_precio") {

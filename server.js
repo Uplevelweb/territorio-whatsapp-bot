@@ -34,6 +34,8 @@ const {
   SUPABASE_URL,
   SUPABASE_CLAVE_PUBLICA,   // la MISMA clave publicable que usa inteligencia/index.html
   URL_PUBLICA,              // la URL del propio bot en Render, para armar el link del PDF
+  ANTHROPIC_API_KEY,        // la clave de console.anthropic.com, para la capa de IA
+  NUMERO_DERIVACION,        // numero de WhatsApp (con codigo de pais, sin +) que recibe los avisos de "derivar a un humano"
   PORT,
 } = process.env;
 
@@ -50,7 +52,7 @@ const sesiones = new Map(); // telefono -> { paso, datos: {...} }
 
 function sesionDe(telefono) {
   if (!sesiones.has(telefono)) {
-    sesiones.set(telefono, { paso: "menu", datos: {} });
+    sesiones.set(telefono, { paso: "menu", datos: {}, historial: [] });
   }
   return sesiones.get(telefono);
 }
@@ -171,14 +173,199 @@ async function inscribirAlerta(datos) {
   return respuesta.ok;
 }
 
+// --- Capa de IA conversacional ------------------------------------------------
+// Para cualquier mensaje de texto libre que no sea "hola"/"menu" ni parte del
+// llenado de datos paso a paso (ver mas abajo). No reemplaza los botones -
+// siguen siendo el atajo rapido para inscribirse o ver las dudas de siempre-,
+// pero evita que el bot se quede mudo ante una pregunta o un pedido escrito
+// con las propias palabras del cliente. Pedido de Serling el 12-09-2026: que
+// converse natural, no de menu, y que sepa derivar a un humano.
+const MODELO_IA = "claude-haiku-4-5-20251001"; // el mas barato: alcanza para conversar y usar herramientas
+
+const MANUAL_TERRITORIO = `
+Eres el agente de WhatsApp de Territorio, el sistema de inteligencia y gestión
+comercial de Uplevel para empresas que le venden al Estado de Chile
+(licitaciones, compras ágiles, grandes compras y Convenio Marco).
+
+QUÉ VENDE TERRITORIO, EN CONCRETO:
+1. Monitoreo diario y automático de Mercado Público, filtrado según lo que
+   esa empresa vende. Llega por correo, todos los días, a las 8:00 o 15:00
+   (el cliente elige la hora al inscribirse).
+2. Perfil de empresa dentro del sistema, identificado por el RUT, con sus
+   palabras clave, rubro e historial — se afina con el tiempo, no es una
+   lista genérica.
+3. Agenda diaria de gestión comercial: organiza contactos, seguimientos y
+   pendientes.
+4. Módulo de control de licitaciones: sigue cada proceso de principio a fin,
+   avisa si hay visita a terreno obligatoria (con fecha y dirección), muestra
+   los criterios de evaluación ordenados por peso, el monto y las fechas de
+   cierre. Todo dentro de la misma Alerta Diaria.
+5. Email marketing integrado (plan Premium): envío de correos masivos a la
+   cartera del cliente, con una cuenta de Gmail ya configurada — sin
+   plataforma ni suscripción adicional.
+6. A nivel interno de Uplevel: cruce en tiempo real de todas las operaciones
+   de todos los clientes y proveedores del mercado, lo que permite
+   personalizar aún más cada caso.
+
+Universo al que apunta: casi 40.000 proveedores que hoy le venden al Estado
+por alguna de las seis vías de Mercado Público.
+
+PLANES:
+- Inicio: $19.990/mes (oferta de lanzamiento)
+- Plus: $49.990/mes (el más contratado)
+- Premium: a convenir (equipos y volumen alto, incluye el email marketing)
+Los 7 primeros días de cualquier plan son gratis, sin tarjeta.
+
+CÓMO DEBES CONVERSAR:
+- Natural, cercano, en español de Chile. Nada de menús ni listas de opciones
+  numeradas: conversa como alguien que conoce el sistema a fondo.
+- Mensajes cortos, como en WhatsApp (dos o tres frases, no párrafos largos).
+  Usa *negrita* con asteriscos para lo importante, no encabezados de markdown.
+- Responde cualquier duda sobre el sistema con libertad, usando SOLO la
+  información de este mensaje. Si no sabes algo, dilo con naturalidad y
+  ofrece derivar a una persona del equipo en vez de inventar.
+- Cuando detectes que el negocio del cliente calza con lo que Territorio
+  resuelve, argumenta y motiva la contratación — no te limites a informar.
+- Si el cliente quiere probar gratis, junta con naturalidad estos datos a lo
+  largo de la conversación: correo, a qué se dedica (para las palabras clave)
+  y a qué hora prefiere el correo (8:00 o 15:00). En cuanto los tengas, usa la
+  herramienta inscribir_prueba_gratis para dejarlo inscrito ahí mismo, sin
+  mandarlo a ningún link ni formulario aparte.
+- Usa la herramienta derivar_a_humano cuando el caso sea de una empresa de
+  *Convenio Marco* que necesite más detalle del que puedes resolver solo, o
+  de una empresa *importadora* o *fabricante PYME nacional* — son los
+  perfiles que ameritan atención directa de Uplevel. Antes de derivar,
+  avísale al cliente que en breve alguien del equipo lo contacta.
+`.trim();
+
+const HERRAMIENTAS_IA = [
+  {
+    name: "inscribir_prueba_gratis",
+    description: "Inscribe al cliente en la prueba gratis de 7 dias de Territorio, con los datos que ya se juntaron conversando.",
+    input_schema: {
+      type: "object",
+      properties: {
+        email: { type: "string", description: "Correo del cliente" },
+        nombre: { type: "string", description: "Nombre o empresa" },
+        rut: { type: "string", description: "RUT de la empresa, si lo dio" },
+        palabras: { type: "array", items: { type: "string" }, description: "Rubro o palabras clave de lo que vende" },
+        hora: { type: "integer", enum: [8, 15], description: "Hora en que quiere recibir el correo" },
+      },
+      required: ["email", "palabras", "hora"],
+    },
+  },
+  {
+    name: "derivar_a_humano",
+    description: "Avisa al equipo de Uplevel que esta conversacion necesita atencion de una persona (Convenio Marco con mas detalle, importador, o fabricante PYME nacional).",
+    input_schema: {
+      type: "object",
+      properties: {
+        motivo: { type: "string", description: "Por que se deriva: convenio_marco, importador, fabricante_pyme, u otro" },
+        resumen: { type: "string", description: "Resumen breve de lo que necesita el cliente" },
+      },
+      required: ["motivo", "resumen"],
+    },
+  },
+];
+
+async function llamarClaude(historial) {
+  const respuesta = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: MODELO_IA,
+      max_tokens: 500,
+      system: MANUAL_TERRITORIO,
+      tools: HERRAMIENTAS_IA,
+      messages: historial,
+    }),
+  });
+  if (!respuesta.ok) {
+    console.error("Error llamando a la API de Claude:", await respuesta.text());
+    return null;
+  }
+  return respuesta.json();
+}
+
+// Deja como maximo las ultimas 12 entradas (6 idas y vueltas), siempre
+// empezando en un mensaje "user" -si no, la API de Claude lo rechaza-. Se
+// llama solo al CERRAR un intercambio completo, nunca a mitad de una vuelta
+// de herramientas, para no separar un tool_use de su tool_result.
+function recortarHistorial(historial) {
+  let recorte = historial.slice(-12);
+  while (recorte.length && recorte[0].role !== "user") recorte = recorte.slice(1);
+  return recorte;
+}
+
+async function responderConIA(telefono, sesion, textoUsuario) {
+  sesion.historial.push({ role: "user", content: textoUsuario });
+
+  for (let vuelta = 0; vuelta < 3; vuelta++) {
+    const resultado = await llamarClaude(sesion.historial);
+    if (!resultado) {
+      return textoA(telefono, "Se me cayó la conexión un segundo 🙈 ¿puedes repetir lo último que escribiste?");
+    }
+
+    sesion.historial.push({ role: "assistant", content: resultado.content });
+
+    const usosDeHerramienta = resultado.content.filter(b => b.type === "tool_use");
+    if (usosDeHerramienta.length === 0) {
+      const texto = resultado.content.filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+      sesion.historial = recortarHistorial(sesion.historial);
+      return texto ? textoA(telefono, texto) : menuPrincipal(telefono);
+    }
+
+    const resultadosDeHerramienta = [];
+    for (const uso of usosDeHerramienta) {
+      let salida = "ok";
+      try {
+        if (uso.name === "inscribir_prueba_gratis") {
+          const ok = await inscribirAlerta(uso.input);
+          salida = ok ? "Inscripcion exitosa." : "Fallo la inscripcion, avisale al cliente que lo intentemos de nuevo.";
+        } else if (uso.name === "derivar_a_humano") {
+          if (NUMERO_DERIVACION) {
+            await textoA(NUMERO_DERIVACION,
+              `🔔 *Derivar a humano*\nDe: ${telefono}\nMotivo: ${uso.input.motivo}\nResumen: ${uso.input.resumen}`);
+          } else {
+            console.error("⚠️ NUMERO_DERIVACION no esta configurado: el aviso de derivacion no se pudo mandar.");
+          }
+          salida = "Aviso enviado al equipo de Uplevel.";
+        }
+      } catch (error) {
+        console.error(`Error ejecutando la herramienta ${uso.name}:`, error);
+        salida = "Hubo un error interno, avisale al cliente con naturalidad y sigue la conversacion.";
+      }
+      resultadosDeHerramienta.push({ type: "tool_result", tool_use_id: uso.id, content: salida });
+    }
+    sesion.historial.push({ role: "user", content: resultadosDeHerramienta });
+  }
+
+  sesion.historial = recortarHistorial(sesion.historial);
+  return textoA(telefono, "Dame un segundo para revisar esto bien y te confirmo.");
+}
+
 // --- El arbol de conversacion ------------------------------------------------
 // Cada rama corresponde a un nodo del diagrama del documento "Embudo Territorio".
 async function manejarTexto(telefono, sesion, texto) {
   const t = texto.trim().toLowerCase();
 
-  if (sesion.paso === "menu" || t === "hola" || t === "menu") {
+  // "hola"/"menu" siempre reinician la conversacion, sea cual sea el paso en
+  // que iba -es la salida de emergencia si alguien se pierde a mitad de un
+  // llenado de datos o de una charla con la IA-.
+  if (t === "hola" || t === "menu") {
     sesion.paso = "menu";
+    sesion.historial = [];
     return menuPrincipal(telefono);
+  }
+
+  // Cualquier otro mensaje libre, mientras no se este llenando un dato
+  // puntual (correo, nombre, palabras, hora), lo conversa la IA -no el menu-.
+  if (sesion.paso === "menu") {
+    return responderConIA(telefono, sesion, texto);
   }
 
   // --- Recoleccion de datos, paso a paso (mismo orden que el formulario) ---

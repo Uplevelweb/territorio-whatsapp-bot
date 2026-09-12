@@ -103,6 +103,15 @@ function documentoA(telefono, url, nombreArchivo, texto) {
   });
 }
 
+// Manda una imagen (la muestra de "asi se ve el correo").
+function imagenA(telefono, url, texto) {
+  return enviar({
+    to: telefono,
+    type: "image",
+    image: { link: url, caption: texto },
+  });
+}
+
 function listaA(telefono, texto, opciones) {
   return enviar({
     to: telefono,
@@ -228,12 +237,19 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
       { id: "duda_turnos", titulo: "Cómo llegan las alertas" },
       { id: "duda_convenio", titulo: "Convenio Marco" },
       { id: "ver_resumen", titulo: "Ver resumen de Territorio" },
+      { id: "ver_ejemplo", titulo: "Así se ve el correo" },
     ]);
   }
 
   if (id === "ver_resumen") {
     await documentoA(telefono, `${URL_BASE}/territorio-resumen.pdf`, "Territorio.pdf",
       "Aquí tienes el resumen de una página: cómo funciona y los planes.");
+    return menuPrincipal(telefono);
+  }
+
+  if (id === "ver_ejemplo") {
+    await imagenA(telefono, `${URL_BASE}/asi-se-ve-el-correo.png`,
+      "Así se ve el correo que te llega cada día: la oportunidad que más calza, destacada, y el resto del día debajo.");
     return menuPrincipal(telefono);
   }
 

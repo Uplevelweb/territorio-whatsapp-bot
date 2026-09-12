@@ -232,10 +232,14 @@ CÓMO DEBES CONVERSAR:
   herramienta inscribir_prueba_gratis para dejarlo inscrito ahí mismo, sin
   mandarlo a ningún link ni formulario aparte.
 - Usa la herramienta derivar_a_humano cuando el caso sea de una empresa de
-  *Convenio Marco* que necesite más detalle del que puedes resolver solo, o
-  de una empresa *importadora* o *fabricante PYME nacional* — son los
-  perfiles que ameritan atención directa de Uplevel. Antes de derivar,
-  avísale al cliente que en breve alguien del equipo lo contacta.
+  *Convenio Marco* que necesite más detalle del que puedes resolver solo, de
+  una empresa *importadora* o *fabricante PYME nacional*, o cuando el cliente
+  pida directamente hablar con una persona. En CUALQUIERA de esos casos,
+  antes de derivar pregúntale su *RUT o su correo* (el que ya usa para las
+  alertas, si ya es cliente) — es lo único que necesita el equipo para
+  ubicarlo en el sistema y darle atención. Si el cliente no quiere darlo,
+  deriva igual, pero dilo en el resumen. Antes de derivar, avísale que en
+  breve alguien del equipo lo contacta.
 `.trim();
 
 const HERRAMIENTAS_IA = [
@@ -256,14 +260,15 @@ const HERRAMIENTAS_IA = [
   },
   {
     name: "derivar_a_humano",
-    description: "Avisa al equipo de Uplevel que esta conversacion necesita atencion de una persona (Convenio Marco con mas detalle, importador, o fabricante PYME nacional).",
+    description: "Avisa al equipo de Uplevel que esta conversacion necesita atencion de una persona (Convenio Marco con mas detalle, importador, fabricante PYME nacional, o el cliente pidio hablar con alguien). Antes de llamarla, pidele al cliente su RUT o correo para que el equipo lo pueda ubicar.",
     input_schema: {
       type: "object",
       properties: {
-        motivo: { type: "string", description: "Por que se deriva: convenio_marco, importador, fabricante_pyme, u otro" },
+        motivo: { type: "string", description: "Por que se deriva: convenio_marco, importador, fabricante_pyme, pidio_humano, u otro" },
         resumen: { type: "string", description: "Resumen breve de lo que necesita el cliente" },
+        contacto: { type: "string", description: "El RUT o el correo que dio el cliente para ubicarlo en el sistema. Si no quiso darlo, escribir 'no proporcionado'." },
       },
-      required: ["motivo", "resumen"],
+      required: ["motivo", "resumen", "contacto"],
     },
   },
 ];
@@ -327,10 +332,10 @@ async function responderConIA(telefono, sesion, textoUsuario) {
           const ok = await inscribirAlerta(uso.input);
           salida = ok ? "Inscripcion exitosa." : "Fallo la inscripcion, avisale al cliente que lo intentemos de nuevo.";
         } else if (uso.name === "derivar_a_humano") {
-          console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${uso.input.motivo} | Resumen: ${uso.input.resumen}`);
+          console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${uso.input.motivo} | Contacto: ${uso.input.contacto} | Resumen: ${uso.input.resumen}`);
           if (NUMERO_DERIVACION) {
             await textoA(NUMERO_DERIVACION,
-              `🔔 *Derivar a humano*\nDe: ${telefono}\nMotivo: ${uso.input.motivo}\nResumen: ${uso.input.resumen}`);
+              `🔔 *Derivar a humano*\nDe (WhatsApp): ${telefono}\nRUT/correo: ${uso.input.contacto}\nMotivo: ${uso.input.motivo}\nResumen: ${uso.input.resumen}`);
           } else {
             console.error("⚠️ NUMERO_DERIVACION no esta configurado: el aviso de derivacion no se pudo mandar.");
           }

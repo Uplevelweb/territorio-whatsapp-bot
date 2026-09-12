@@ -327,12 +327,17 @@ async function responderConIA(telefono, sesion, textoUsuario) {
           const ok = await inscribirAlerta(uso.input);
           salida = ok ? "Inscripcion exitosa." : "Fallo la inscripcion, avisale al cliente que lo intentemos de nuevo.";
         } else if (uso.name === "derivar_a_humano") {
+          console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${uso.input.motivo} | Resumen: ${uso.input.resumen}`);
           if (NUMERO_DERIVACION) {
             await textoA(NUMERO_DERIVACION,
               `🔔 *Derivar a humano*\nDe: ${telefono}\nMotivo: ${uso.input.motivo}\nResumen: ${uso.input.resumen}`);
           } else {
             console.error("⚠️ NUMERO_DERIVACION no esta configurado: el aviso de derivacion no se pudo mandar.");
           }
+          // Pausa la IA en esta conversacion: hasta que alguien la reactive
+          // escribiendo "hola", el bot no vuelve a responder solo, para que
+          // no se cruce con lo que conteste una persona del equipo.
+          sesion.paso = "derivado";
           salida = "Aviso enviado al equipo de Uplevel.";
         }
       } catch (error) {
@@ -360,6 +365,14 @@ async function manejarTexto(telefono, sesion, texto) {
     sesion.paso = "menu";
     sesion.historial = [];
     return menuPrincipal(telefono);
+  }
+
+  // Conversacion ya derivada a una persona: la IA se queda callada -no
+  // sigue respondiendo sola- para no cruzarse con lo que conteste el equipo.
+  // "hola"/"menu" (arriba) es la forma de reactivarla si hace falta.
+  if (sesion.paso === "derivado") {
+    console.log(`💬 Mensaje de ${telefono} mientras la conversacion esta derivada (IA en pausa): "${texto}"`);
+    return; // no manda nada: quien sigue la conversacion ahora es una persona
   }
 
   // Cualquier otro mensaje libre, mientras no se este llenando un dato
@@ -512,6 +525,7 @@ app.post("/webhook", async (req, res) => {
 
     const telefono = mensaje.from;
     const sesion = sesionDe(telefono);
+    console.log(`📩 Mensaje de ${telefono} (tipo: ${mensaje.type}, paso: ${sesion.paso})`);
 
     if (mensaje.type === "text") {
       await manejarTexto(telefono, sesion, mensaje.text.body);

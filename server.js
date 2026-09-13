@@ -39,6 +39,7 @@ const {
   NUMERO_DERIVACION,        // numero de WhatsApp (con codigo de pais, sin +) que recibe los avisos de "derivar a un humano"
   FLOW_API_KEY,             // credenciales de flow.cl, para cobrar los planes
   FLOW_SECRET_KEY,
+  TAREA_CLAVE,              // clave inventada para que solo el reloj de Supabase pueda llamar a /tareas/*
   PORT,
 } = process.env;
 
@@ -292,6 +293,18 @@ async function actualizarPlanCliente(email, plan) {
   }
 }
 
+async function sincronizarAlDia(emailsAtrasados) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_sincronizar_al_dia`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_emails_atrasados: emailsAtrasados }),
+    });
+  } catch (error) {
+    console.error("No se pudo sincronizar quien esta al dia:", error);
+  }
+}
+
 // --- Pagos con Flow (flow.cl) ------------------------------------------------
 // Documentacion oficial revisada el 12-09-2026 (flow.cl/docs/api.html). El
 // flujo tiene 3 pasos, no uno: (1) crear el cliente en Flow, (2) mandarlo a
@@ -509,6 +522,24 @@ function manualPara(sesion) {
   const cliente = sesion.datos?.clienteIdentificado;
   if (!cliente) return MANUAL_TERRITORIO;
   const plan = cliente.plan || "sin plan pagado (prueba gratis o ninguno)";
+
+  // al_dia llega null si nunca tuvo plan (prueba gratis) -eso no es una
+  // deuda, asi que solo se restringe cuando es explicitamente false: alguien
+  // que SI tuvo un plan pagado y Flow reporta con un cobro vencido.
+  if (cliente.al_dia === false) {
+    return `${MANUAL_TERRITORIO}
+
+NOTA SOBRE ESTE CLIENTE (ya se identifico, no se lo vuelvas a pedir):
+Nombre: ${cliente.nombre || "no registrado"}. Correo: ${cliente.email || "no registrado"}.
+Plan actual: ${plan}. ⚠️ ESTADO DE PAGO: ATRASADO (Flow reporta un cobro
+vencido en su suscripcion).
+Por eso, aunque su plan diga ${plan}, HOY NO tiene acceso total a la
+plataforma ni al soporte tecnico 24/7 -esos beneficios se pausan mientras
+este atrasado, no se pierden para siempre-. Avisale esto con amabilidad,
+sin sonar como un cobrador, y ofrece de inmediato enviar_link_de_pago para
+regularizar. Una vez que pague, todo vuelve a la normalidad solo.`.trim();
+  }
+
   return `${MANUAL_TERRITORIO}
 
 NOTA SOBRE ESTE CLIENTE (ya se identifico, no se lo vuelvas a pedir):
@@ -863,6 +894,50 @@ app.post("/flow/callback", express.urlencoded({ extended: true }), async (req, r
     await textoA(pendiente.telefono, `🎉 ¡Listo! Tu plan *${pendiente.plan}* ya está activo. Gracias por confiar en Territorio.`);
   } catch (error) {
     console.error("Error en /flow/callback:", error);
+  }
+});
+
+// Revision diaria de morosidad: el reloj de Supabase (pg_cron) llama aca una
+// vez al dia. Se le pregunta a Flow, plan por plan, cuales cobros estan
+// vencidos (/invoice/getOverDue -documentado oficialmente, a diferencia del
+// aviso automatico de los planes, que no explica que datos manda), se busca
+// el correo de cada cliente atrasado (/customer/get) y se sincroniza en
+// Supabase. Pedido de Serling el 12-09-2026: "debe existir una condicion
+// que verifique que el usuario esta al dia" para dar o restringir acceso.
+app.get("/tareas/sincronizar-flow", async (req, res) => {
+  if (!TAREA_CLAVE || req.query.clave !== TAREA_CLAVE) return res.sendStatus(403);
+  res.sendStatus(200); // el reloj no necesita esperar a que termine
+
+  try {
+    const emailsAtrasados = new Set();
+
+    for (const idPlanFlow of Object.values(FLOW_PLAN_ID)) {
+      let inicio = 0;
+      const limite = 100;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const pagina = await llamarFlow("/invoice/getOverDue", { planId: idPlanFlow, start: inicio, limit: limite }, "GET");
+        if (!pagina) break;
+        // La documentacion de Flow muestra "data" a veces como string JSON:
+        // se acepta cualquiera de las dos formas, para no romperse por eso.
+        const items = Array.isArray(pagina.data) ? pagina.data
+          : (typeof pagina.data === "string" ? JSON.parse(pagina.data || "[]") : []);
+
+        for (const factura of items) {
+          if (!factura?.customerId) continue;
+          const cliente = await llamarFlow("/customer/get", { customerId: factura.customerId }, "GET");
+          if (cliente?.email) emailsAtrasados.add(cliente.email.toLowerCase());
+        }
+
+        if (!pagina.hasMore || items.length === 0) break;
+        inicio += limite;
+      }
+    }
+
+    await sincronizarAlDia([...emailsAtrasados]);
+    console.log(`✅ Sincronizacion de morosidad con Flow: ${emailsAtrasados.size} cliente(s) atrasado(s).`);
+  } catch (error) {
+    console.error("Error sincronizando morosidad con Flow:", error);
   }
 });
 

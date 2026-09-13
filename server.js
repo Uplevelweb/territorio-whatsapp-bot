@@ -18,6 +18,7 @@
 // =============================================================================
 
 const express = require("express");
+const crypto = require("crypto");
 const app = express();
 app.use(express.json());
 
@@ -36,8 +37,15 @@ const {
   URL_PUBLICA,              // la URL del propio bot en Render, para armar el link del PDF
   ANTHROPIC_API_KEY,        // la clave de console.anthropic.com, para la capa de IA
   NUMERO_DERIVACION,        // numero de WhatsApp (con codigo de pais, sin +) que recibe los avisos de "derivar a un humano"
+  FLOW_API_KEY,             // credenciales de flow.cl, para cobrar los planes
+  FLOW_SECRET_KEY,
   PORT,
 } = process.env;
+
+const FLOW_BASE = "https://www.flow.cl/api";
+// El identificador de cada plan tal cual quedo creado en el panel de Flow
+// (Suscripciones > Planes) el 12-09-2026.
+const FLOW_PLAN_ID = { inicio: "TERRITORIO_INICIO", plus: "TERRITORIO_PLUS", premium: "TERRITORIO_PREMIUM" };
 
 const URL_BASE = URL_PUBLICA || "https://territorio-whatsapp-bot.onrender.com";
 
@@ -260,6 +268,87 @@ async function identificarCliente(identificador) {
   }
 }
 
+async function guardarFlowCustomerId(email, customerId) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_guardar_flow_customer_id`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_email: email, p_customer_id: customerId }),
+    });
+  } catch (error) {
+    console.error("No se pudo guardar el flow_customer_id:", error);
+  }
+}
+
+async function actualizarPlanCliente(email, plan) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_actualizar_plan`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_email: email, p_plan: plan }),
+    });
+  } catch (error) {
+    console.error("No se pudo actualizar el plan del cliente:", error);
+  }
+}
+
+// --- Pagos con Flow (flow.cl) ------------------------------------------------
+// Documentacion oficial revisada el 12-09-2026 (flow.cl/docs/api.html). El
+// flujo tiene 3 pasos, no uno: (1) crear el cliente en Flow, (2) mandarlo a
+// registrar su tarjeta -eso es lo que da el link real, no /customer/create-,
+// (3) cuando Flow avisa que la tarjeta quedo registrada (webhook en
+// /flow/callback), recien ahi se crea la suscripcion al plan.
+function firmarFlow(params) {
+  const claves = Object.keys(params).sort();
+  const cadena = claves.map(k => `${k}${params[k]}`).join("");
+  return crypto.createHmac("sha256", FLOW_SECRET_KEY).update(cadena).digest("hex");
+}
+
+async function llamarFlow(ruta, params, metodo = "POST") {
+  const completos = { ...params, apiKey: FLOW_API_KEY };
+  completos.s = firmarFlow(completos);
+  const cuerpo = new URLSearchParams(completos).toString();
+
+  const respuesta = metodo === "GET"
+    ? await fetch(`${FLOW_BASE}${ruta}?${cuerpo}`)
+    : await fetch(`${FLOW_BASE}${ruta}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: cuerpo,
+      });
+
+  const datos = await respuesta.json().catch(() => null);
+  if (!respuesta.ok) {
+    console.error(`Error de Flow en ${ruta}:`, datos);
+    return null;
+  }
+  return datos;
+}
+
+// Guarda, por telefono, a que plan y con que datos se quiere suscribir
+// alguien mientras registra su tarjeta -Flow avisa con solo un "token", asi
+// que hay que recordar aca a quien pertenece-. En memoria: si el servidor
+// se reinicia a mitad del registro, esa persona simplemente vuelve a pedir
+// el link, no es grave.
+const pagosPendientes = new Map(); // token -> { telefono, plan, email, nombre }
+
+// Busca el flow_customer_id ya guardado (evita crear un cliente duplicado
+// en Flow cada vez que alguien vuelve a pagar); si no existe, crea uno.
+async function obtenerOCrearClienteFlow(email, nombre) {
+  const existente = await identificarCliente(email);
+  if (existente?.flow_customer_id) return existente.flow_customer_id;
+
+  const creado = await llamarFlow("/customer/create", {
+    name: nombre || email,
+    email,
+    externalId: email,
+  });
+  if (!creado?.customerId) return null;
+
+  await guardarFlowCustomerId(email, creado.customerId);
+  return creado.customerId;
+}
+
 // --- Capa de IA conversacional ------------------------------------------------
 // Para cualquier mensaje de texto libre que no sea "hola"/"menu" ni parte del
 // llenado de datos paso a paso (ver mas abajo). No reemplaza los botones -
@@ -327,6 +416,11 @@ CÓMO DEBES CONVERSAR:
   ubicarlo en el sistema y darle atención. Si el cliente no quiere darlo,
   deriva igual, pero dilo en el resumen. Antes de derivar, avísale que en
   breve alguien del equipo lo contacta.
+- Usa la herramienta enviar_link_de_pago cuando el cliente quiera pagar,
+  contratar o mejorar de plan, o cuando NO tenga un plan activo (plan vacío)
+  y quiera contratar uno. Pídele su correo y nombre si no los tienes. El
+  link lleva a registrar su tarjeta de forma segura con Flow — nunca pidas
+  tú el número de tarjeta, eso lo hace Flow, no el chat.
 `.trim();
 
 const HERRAMIENTAS_IA = [
@@ -356,6 +450,19 @@ const HERRAMIENTAS_IA = [
         contacto: { type: "string", description: "El RUT o el correo que dio el cliente para ubicarlo en el sistema. Si no quiso darlo, escribir 'no proporcionado'." },
       },
       required: ["motivo", "resumen", "contacto"],
+    },
+  },
+  {
+    name: "enviar_link_de_pago",
+    description: "Manda el link para contratar/pagar un plan (Inicio, Plus o Premium) via Flow. Usalo cuando el cliente quiera pagar, mejorar de plan, o no tenga plan activo y quiera contratar.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan: { type: "string", enum: ["inicio", "plus", "premium"], description: "El plan que quiere contratar" },
+        email: { type: "string", description: "Correo del cliente, para asociar el pago" },
+        nombre: { type: "string", description: "Nombre o empresa del cliente" },
+      },
+      required: ["plan", "email", "nombre"],
     },
   },
 ];
@@ -405,12 +512,14 @@ function manualPara(sesion) {
   return `${MANUAL_TERRITORIO}
 
 NOTA SOBRE ESTE CLIENTE (ya se identifico, no se lo vuelvas a pedir):
-Nombre: ${cliente.nombre || "no registrado"}. Plan actual: ${plan}.
+Nombre: ${cliente.nombre || "no registrado"}. Correo: ${cliente.email || "no registrado"}.
+Plan actual: ${plan}.
 Aplica las reglas de soporte de ESE plan: si es Inicio o no tiene plan
 pagado, su soporte incluido es por correo (y puede agendar una hora de
 Atencion Personalizada a $24.990 si quiere hablar con alguien); si es Plus
 o Premium, puede escribir sus dudas libremente y usar derivar_a_humano sin
-problema.`.trim();
+problema. Si quiere pagar o mejorar de plan, ya tienes su correo y nombre:
+usa enviar_link_de_pago sin volver a pedirselos.`.trim();
 }
 
 async function responderConIA(telefono, sesion, textoUsuario) {
@@ -456,6 +565,31 @@ async function responderConIA(telefono, sesion, textoUsuario) {
           // no se cruce con lo que conteste una persona del equipo.
           sesion.paso = "derivado";
           salida = "Aviso enviado al equipo de Uplevel.";
+        } else if (uso.name === "enviar_link_de_pago") {
+          const { plan, email, nombre } = uso.input;
+          const idPlanFlow = FLOW_PLAN_ID[plan];
+          if (!idPlanFlow || !FLOW_API_KEY || !FLOW_SECRET_KEY) {
+            salida = "El pago todavia no esta disponible (falta configuracion). Avisale al cliente que el equipo lo contacta para coordinar el pago.";
+            console.error("⚠️ enviar_link_de_pago llamado sin FLOW_API_KEY/FLOW_SECRET_KEY configurados, o con un plan invalido:", plan);
+          } else {
+            const customerId = await obtenerOCrearClienteFlow(email, nombre);
+            if (!customerId) {
+              salida = "No se pudo generar el link de pago. Avisale al cliente que lo intentemos de nuevo en un momento.";
+            } else {
+              const registro = await llamarFlow("/customer/register", {
+                customerId,
+                url_return: `${URL_BASE}/flow/callback`,
+              });
+              if (!registro?.url || !registro?.token) {
+                salida = "No se pudo generar el link de pago. Avisale al cliente que lo intentemos de nuevo.";
+              } else {
+                pagosPendientes.set(registro.token, { telefono, plan, idPlanFlow, email, nombre });
+                await textoA(telefono,
+                  `💳 Para activar el plan *${plan}*, registra tu tarjeta aquí (es Flow, seguro, cobro recurrente mensual):\n${registro.url}?token=${registro.token}`);
+                salida = "Link de pago enviado. Avisale al cliente que apenas registre su tarjeta, el plan queda activo solo.";
+              }
+            }
+          }
         }
       } catch (error) {
         console.error(`Error ejecutando la herramienta ${uso.name}:`, error);
@@ -679,6 +813,56 @@ app.post("/webhook", async (req, res) => {
     await guardarConversacion(telefono, sesion);
   } catch (error) {
     console.error("Error procesando el mensaje:", error);
+  }
+});
+
+// Flow llama aca (por POST) cuando el cliente termina de registrar su
+// tarjeta -bien o mal-, pasando el mismo "token" que se le entrego al
+// mandar el link. Flow manda application/x-www-form-urlencoded, distinto
+// al resto del bot (que es JSON), por eso este endpoint lleva su propio
+// middleware.
+app.post("/flow/callback", express.urlencoded({ extended: true }), async (req, res) => {
+  res.sendStatus(200); // Flow solo necesita el 200, no espera contenido
+
+  try {
+    const token = req.body?.token;
+    if (!token) return;
+
+    const pendiente = pagosPendientes.get(token);
+    pagosPendientes.delete(token);
+
+    const estado = await llamarFlow("/customer/getRegisterStatus", { token }, "GET");
+    const registrado = estado && (estado.status === "1" || estado.status === 1);
+
+    if (!pendiente) {
+      console.error("⚠️ Callback de Flow con un token que ya no estaba pendiente (¿reinicio del servidor a mitad del registro?):", token);
+      return;
+    }
+
+    if (!registrado) {
+      await textoA(pendiente.telefono, "El registro de tu tarjeta no se completó. Cuando quieras, te mando el link de nuevo.");
+      return;
+    }
+
+    const suscripcion = await llamarFlow("/subscription/create", {
+      planId: pendiente.idPlanFlow,
+      customerId: estado.customerId,
+    });
+
+    if (!suscripcion?.subscriptionId) {
+      console.error("No se pudo crear la suscripcion en Flow:", suscripcion);
+      await textoA(pendiente.telefono, "Tu tarjeta quedó registrada, pero hubo un problema activando el plan. Le avisamos al equipo para resolverlo ahora mismo.");
+      if (NUMERO_DERIVACION) {
+        await textoA(NUMERO_DERIVACION, `⚠️ Tarjeta registrada pero fallo subscription/create.\nCliente: ${pendiente.telefono} (${pendiente.email})\nPlan: ${pendiente.plan}`);
+      }
+      return;
+    }
+
+    await guardarFlowCustomerId(pendiente.email, estado.customerId);
+    await actualizarPlanCliente(pendiente.email, pendiente.plan);
+    await textoA(pendiente.telefono, `🎉 ¡Listo! Tu plan *${pendiente.plan}* ya está activo. Gracias por confiar en Territorio.`);
+  } catch (error) {
+    console.error("Error en /flow/callback:", error);
   }
 });
 

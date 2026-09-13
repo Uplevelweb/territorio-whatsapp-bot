@@ -220,7 +220,13 @@ async function inscribirAlerta(datos) {
       p_agiles: true,
     }),
   });
-  return respuesta.ok;
+  // 12-09-2026: inscribir_alerta ahora devuelve si esa persona YA estaba
+  // registrada (true) o si es una inscripcion nueva (false) -antes se
+  // reinscribia en silencio y el bot decia siempre "quedaste inscrito",
+  // aunque fuera alguien que ya era cliente hace semanas.
+  if (!respuesta.ok) return { ok: false, yaExistia: null };
+  const yaExistia = await respuesta.json().catch(() => null);
+  return { ok: true, yaExistia };
 }
 
 // Respaldo de la derivacion a humano: deja el caso guardado en la tabla
@@ -576,8 +582,14 @@ async function responderConIA(telefono, sesion, textoUsuario) {
       let salida = "ok";
       try {
         if (uso.name === "inscribir_prueba_gratis") {
-          const ok = await inscribirAlerta(uso.input);
-          salida = ok ? "Inscripcion exitosa." : "Fallo la inscripcion, avisale al cliente que lo intentemos de nuevo.";
+          const resultado = await inscribirAlerta(uso.input);
+          if (!resultado.ok) {
+            salida = "Fallo la inscripcion, avisale al cliente que lo intentemos de nuevo.";
+          } else if (resultado.yaExistia) {
+            salida = "Ya estaba registrado antes. Se actualizaron sus datos (palabras clave, hora). Dile que sus alertas siguen llegando igual, sin duplicados -no es una inscripcion nueva.";
+          } else {
+            salida = "Inscripcion nueva, exitosa.";
+          }
         } else if (uso.name === "derivar_a_humano") {
           console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${uso.input.motivo} | Contacto: ${uso.input.contacto} | Resumen: ${uso.input.resumen}`);
           // Dos avisos en paralelo, para que el prospecto nunca se pierda si
@@ -724,13 +736,21 @@ async function manejarTexto(telefono, sesion, texto) {
 
 async function confirmarInscripcion(telefono, sesion, hora) {
   sesion.datos.hora = hora;
-  const ok = await inscribirAlerta(sesion.datos);
+  const resultado = await inscribirAlerta(sesion.datos);
   sesion.paso = "menu";
-  if (ok) {
-    return textoA(telefono,
-      `Listo, ${sesion.datos.nombre?.split(" ")[0] || ""} 🎉 Quedaste inscrito con la prueba gratis de 7 días. Mañana a las ${hora}:00 te llega el primer correo con lo que encontramos para ti.`);
+  const nombre = sesion.datos.nombre?.split(" ")[0] || "";
+  if (!resultado.ok) {
+    return textoA(telefono, "Algo falló al inscribirte. ¿Puedes escribirme tu correo de nuevo para intentarlo otra vez?");
   }
-  return textoA(telefono, "Algo falló al inscribirte. ¿Puedes escribirme tu correo de nuevo para intentarlo otra vez?");
+  // 12-09-2026: mensaje distinto si ya era suscriptor -antes decia
+  // siempre "quedaste inscrito", aunque la persona llevara semanas
+  // recibiendo el correo y solo hubiera venido a cambiar la hora.
+  if (resultado.yaExistia) {
+    return textoA(telefono,
+      `Listo${nombre ? ", " + nombre : ""} 👋 Ya tenías una cuenta con este correo — actualizamos tus palabras clave y tu hora. Sigues recibiendo tu alerta cada mañana a las ${hora}:00, sin nada duplicado.`);
+  }
+  return textoA(telefono,
+    `Listo, ${nombre} 🎉 Quedaste inscrito con la prueba gratis de 7 días. Mañana a las ${hora}:00 te llega el primer correo con lo que encontramos para ti.`);
 }
 
 // --- Respuestas a botones y listas -------------------------------------------

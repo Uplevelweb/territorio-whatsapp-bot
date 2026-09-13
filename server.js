@@ -201,7 +201,13 @@ function menuPrincipal(telefono) {
 }
 
 // --- Llamar a Supabase, igual que el formulario de la web -------------------
-async function inscribirAlerta(datos) {
+// 13-09-2026: acepta un telefono de contacto aparte del de WhatsApp -pedido
+// de Serling: quien escribe puede estar usando un telefono prestado, asi que
+// el numero desde el que llega el mensaje no es necesariamente el numero de
+// la persona-. Si la IA no junto uno explicito (deberia preguntarlo, ver
+// MANUAL_TERRITORIO), se usa el de WhatsApp como respaldo para que el dato
+// nunca quede vacio.
+async function inscribirAlerta(datos, telefonoWhatsApp) {
   const respuesta = await fetch(`${SUPABASE_URL}/rest/v1/rpc/inscribir_alerta`, {
     method: "POST",
     headers: {
@@ -218,6 +224,7 @@ async function inscribirAlerta(datos) {
       p_hora: datos.hora,
       p_licitaciones: true,
       p_agiles: true,
+      p_telefono_contacto: datos.telefono_contacto || telefonoWhatsApp || null,
     }),
   });
   // 12-09-2026: inscribir_alerta ahora devuelve si esa persona YA estaba
@@ -422,10 +429,29 @@ CÓMO DEBES CONVERSAR:
 - Cuando detectes que el negocio del cliente calza con lo que Territorio
   resuelve, argumenta y motiva la contratación — no te limites a informar.
 - Si el cliente quiere probar gratis, junta con naturalidad estos datos a lo
-  largo de la conversación: correo, a qué se dedica (para las palabras clave)
-  y a qué hora prefiere el correo (8:00 o 15:00). En cuanto los tengas, usa la
-  herramienta inscribir_prueba_gratis para dejarlo inscrito ahí mismo, sin
-  mandarlo a ningún link ni formulario aparte.
+  largo de la conversación: correo, a qué se dedica (para las palabras clave),
+  a qué hora prefiere el correo (8:00 o 15:00), y su celular de contacto. En
+  cuanto los tengas TODOS y con forma correcta, usa la herramienta
+  inscribir_prueba_gratis para dejarlo inscrito ahí mismo, sin mandarlo a
+  ningún link ni formulario aparte.
+- VALIDA cada dato contra lo que pediste, antes de darlo por bueno:
+  · Si pediste el correo y lo que te contestan no tiene @ y un dominio con
+    punto (ej: nombre@empresa.cl), NO lo aceptes: dile con naturalidad que
+    ese correo no te cuadra y pídeselo de nuevo. No inventes ni corrijas tú
+    el correo, y no llames a inscribir_prueba_gratis con un correo dudoso.
+  · Si pediste el nombre o la empresa y te contestan con algo que claramente
+    es otra cosa (un correo, un número de teléfono, una sola letra, "no sé"),
+    pregunta de nuevo con otras palabras en vez de darlo por válido.
+  · Si pediste las palabras clave/rubro y la respuesta no tiene relación
+    (por ejemplo, te contestan la hora o un saludo), vuelve a preguntar qué
+    vende — no rellenes el dato con lo que sea que hayan escrito.
+- CONFIRMA el celular de contacto, no lo asumas del número desde el que
+  escribe: pregúntale si este WhatsApp es su propio número o si está
+  escribiendo desde un teléfono prestado/de otra persona. Si es su propio
+  número, listo, puedes usar ese mismo. Si es prestado o de la empresa,
+  pídele el celular donde sí lo puedan ubicar a él directamente y usa ESE
+  como telefono_contacto — el sistema lo necesita para poder ubicar a la
+  persona real, no solo el aparato desde el que escribió hoy.
 - Usa la herramienta derivar_a_humano cuando el caso sea de una empresa de
   *Convenio Marco* que necesite más detalle del que puedes resolver solo, de
   una empresa *importadora* o *fabricante PYME nacional*, o cuando el cliente
@@ -445,15 +471,16 @@ CÓMO DEBES CONVERSAR:
 const HERRAMIENTAS_IA = [
   {
     name: "inscribir_prueba_gratis",
-    description: "Inscribe al cliente en la prueba gratis de 7 dias de Territorio, con los datos que ya se juntaron conversando.",
+    description: "Inscribe al cliente en la prueba gratis de 7 dias de Territorio, con los datos que ya se juntaron conversando y ya fueron confirmados (no a medio validar).",
     input_schema: {
       type: "object",
       properties: {
-        email: { type: "string", description: "Correo del cliente" },
-        nombre: { type: "string", description: "Nombre o empresa" },
+        email: { type: "string", description: "Correo del cliente. Debe tener forma de correo real (algo@algo.algo) antes de llamar a esta herramienta." },
+        nombre: { type: "string", description: "Nombre de la persona o de la empresa (no un correo, no un numero, no una palabra suelta sin sentido)" },
         rut: { type: "string", description: "RUT de la empresa, si lo dio" },
         palabras: { type: "array", items: { type: "string" }, description: "Rubro o palabras clave de lo que vende" },
         hora: { type: "integer", enum: [8, 15], description: "Hora en que quiere recibir el correo" },
+        telefono_contacto: { type: "string", description: "Celular de contacto YA CONFIRMADO con el cliente. Si escribe desde su propio celular, puede ser el mismo numero de WhatsApp; si dijo que es un telefono prestado o de otra persona, este es el numero real de contacto que dio." },
       },
       required: ["email", "palabras", "hora"],
     },
@@ -582,13 +609,23 @@ async function responderConIA(telefono, sesion, textoUsuario) {
       let salida = "ok";
       try {
         if (uso.name === "inscribir_prueba_gratis") {
-          const resultado = await inscribirAlerta(uso.input);
-          if (!resultado.ok) {
-            salida = "Fallo la inscripcion, avisale al cliente que lo intentemos de nuevo.";
-          } else if (resultado.yaExistia) {
-            salida = "Ya estaba registrado antes. Se actualizaron sus datos (palabras clave, hora). Dile que sus alertas siguen llegando igual, sin duplicados -no es una inscripcion nueva.";
+          // 13-09-2026: candado propio, sin depender solo del criterio de la
+          // IA -pedido de Serling: "rechazar cualquier dato que no cumpla
+          // con lo solicitado"-. Si el correo no tiene forma de correo, no
+          // se llama a Supabase: se le devuelve el motivo a la IA para que
+          // vuelva a pedirlo, en vez de guardar un dato invalido o fallar
+          // con un error generico.
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(uso.input.email || "").trim())) {
+            salida = `El correo "${uso.input.email}" no tiene forma de correo valido (falta @ o el dominio). No lo guardes: pidele que lo vuelva a escribir.`;
           } else {
-            salida = "Inscripcion nueva, exitosa.";
+            const resultado = await inscribirAlerta(uso.input, telefono);
+            if (!resultado.ok) {
+              salida = "Fallo la inscripcion, avisale al cliente que lo intentemos de nuevo.";
+            } else if (resultado.yaExistia) {
+              salida = "Ya estaba registrado antes. Se actualizaron sus datos (palabras clave, hora). Dile que sus alertas siguen llegando igual, sin duplicados -no es una inscripcion nueva.";
+            } else {
+              salida = "Inscripcion nueva, exitosa.";
+            }
           }
         } else if (uso.name === "derivar_a_humano") {
           console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${uso.input.motivo} | Contacto: ${uso.input.contacto} | Resumen: ${uso.input.resumen}`);
@@ -686,7 +723,14 @@ async function manejarTexto(telefono, sesion, texto) {
   }
 
   if (sesion.paso === "pedir_nombre") {
-    sesion.datos.nombre = texto.trim();
+    // 13-09-2026: rechaza lo que claramente NO es un nombre -pedido de
+    // Serling: "rechazar cualquier dato que no cumpla con lo solicitado"-,
+    // en vez de guardarlo tal cual venga.
+    const posibleNombre = texto.trim();
+    if (posibleNombre.length < 2 || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(posibleNombre) || /^\+?\d[\d\s-]{5,}$/.test(posibleNombre)) {
+      return textoA(telefono, "Ese dato no me parece un nombre o empresa. ¿Puedes escribirlo de nuevo?");
+    }
+    sesion.datos.nombre = posibleNombre;
     sesion.paso = "pedir_palabras";
     return textoA(telefono, "¿Qué vendes o en qué rubro trabajas? Escríbelo con palabras separadas por coma (ej: aseo, ferretería, notebooks).");
   }
@@ -696,6 +740,22 @@ async function manejarTexto(telefono, sesion, texto) {
     if (sesion.datos.palabras.length === 0) {
       return textoA(telefono, "Necesito al menos una palabra para saber qué buscarte. ¿Cuál sería?");
     }
+    sesion.paso = "pedir_telefono";
+    return botonesA(telefono, "Una última: ¿este WhatsApp es tu número de contacto, o estás escribiendo desde un teléfono prestado?", [
+      { id: "telefono_este_mismo", titulo: "Es mi número" },
+      { id: "telefono_otro", titulo: "Es prestado" },
+    ]);
+  }
+
+  // 13-09-2026: confirma el celular de contacto en vez de asumir el numero
+  // desde el que escribe -puede ser un telefono prestado (de la empresa, de
+  // otra persona)-. Si dice que es prestado, se le pide el numero real.
+  if (sesion.paso === "pedir_telefono_otro") {
+    const soloDigitos = texto.replace(/\D/g, "");
+    if (soloDigitos.length < 8) {
+      return textoA(telefono, "Ese número no me cuadra. ¿Puedes escribirlo de nuevo, con código de área? (ej: +56 9 1234 5678)");
+    }
+    sesion.datos.telefono_contacto = texto.trim();
     sesion.paso = "pedir_hora";
     return botonesA(telefono, "¿A qué hora te acomoda recibir el correo?", [
       { id: "hora_8", titulo: "8:00" },
@@ -736,7 +796,7 @@ async function manejarTexto(telefono, sesion, texto) {
 
 async function confirmarInscripcion(telefono, sesion, hora) {
   sesion.datos.hora = hora;
-  const resultado = await inscribirAlerta(sesion.datos);
+  const resultado = await inscribirAlerta(sesion.datos, telefono);
   sesion.paso = "menu";
   const nombre = sesion.datos.nombre?.split(" ")[0] || "";
   if (!resultado.ok) {
@@ -816,6 +876,20 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
 
   if (id === "hora_8") return confirmarInscripcion(telefono, sesion, 8);
   if (id === "hora_15") return confirmarInscripcion(telefono, sesion, 15);
+
+  // 13-09-2026: confirmacion del celular de contacto (ver pedir_palabras).
+  if (id === "telefono_este_mismo") {
+    sesion.datos.telefono_contacto = telefono;
+    sesion.paso = "pedir_hora";
+    return botonesA(telefono, "¿A qué hora te acomoda recibir el correo?", [
+      { id: "hora_8", titulo: "8:00" },
+      { id: "hora_15", titulo: "15:00" },
+    ]);
+  }
+  if (id === "telefono_otro") {
+    sesion.paso = "pedir_telefono_otro";
+    return textoA(telefono, "Ya. ¿Cuál es el celular donde sí te podemos ubicar? (con código de área)");
+  }
 
   return menuPrincipal(telefono);
 }

@@ -692,7 +692,11 @@ async function manejarTexto(telefono, sesion, texto) {
   // "hola"/"menu" siempre reinician la conversacion, sea cual sea el paso en
   // que iba -es la salida de emergencia si alguien se pierde a mitad de un
   // llenado de datos o de una charla con la IA-.
-  if (t === "hola" || t === "menu") {
+  // 14-09-2026: antes exigia "hola" SOLO, sin nada mas -a Serling la dejo
+  // muda una conversacion derivada porque escribio "Hola, quiero probar..."
+  // en vez de "hola" a secas-. Ahora basta con que el mensaje EMPIECE con
+  // "hola", que es como la gente realmente escribe.
+  if (t === "menu" || t.startsWith("hola")) {
     sesion.paso = "menu";
     sesion.historial = [];
     return menuPrincipal(telefono);

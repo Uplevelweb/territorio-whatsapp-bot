@@ -439,6 +439,12 @@ CÓMO DEBES CONVERSAR:
     punto (ej: nombre@empresa.cl), NO lo aceptes: dile con naturalidad que
     ese correo no te cuadra y pídeselo de nuevo. No inventes ni corrijas tú
     el correo, y no llames a inscribir_prueba_gratis con un correo dudoso.
+  · Una vez que el correo tenga forma válida, PÍDELE que lo repita una vez
+    más antes de darlo por confirmado ("para no equivocarnos, ¿me lo repites
+    una vez más?"). Si el segundo correo no coincide EXACTO con el primero,
+    dile con naturalidad que no calzan y vuelve a pedir el correo desde cero
+    — no asumas cuál de los dos es el correcto. Solo con los dos iguales
+    queda confirmado y puedes usarlo en inscribir_prueba_gratis.
   · Si pediste el nombre o la empresa y te contestan con algo que claramente
     es otra cosa (un correo, un número de teléfono, una sola letra, "no sé"),
     pregunta de nuevo con otras palabras en vez de darlo por válido.
@@ -722,6 +728,18 @@ async function manejarTexto(telefono, sesion, texto) {
       return textoA(telefono, "Ese correo no me cuadra. ¿Puedes escribirlo de nuevo? (ej: nombre@empresa.cl)");
     }
     sesion.datos.email = t;
+    sesion.paso = "pedir_email_confirmar";
+    return textoA(telefono, "Para evitar errores de tipeo, escríbemelo una vez más.");
+  }
+
+  // Repetir el correo evita el typo mas comun que rompe el funnel: la
+  // persona nunca recibe el correo de confirmacion porque escribio mal su
+  // propia direccion, y ni ella ni Serling se enteran hasta mucho despues.
+  if (sesion.paso === "pedir_email_confirmar") {
+    if (t !== sesion.datos.email) {
+      sesion.paso = "pedir_email";
+      return textoA(telefono, "Ese correo no coincide con el que escribiste antes. Empecemos de nuevo: ¿cuál es tu correo?");
+    }
     sesion.paso = "pedir_nombre";
     return textoA(telefono, "Perfecto. ¿A nombre de quién o de qué empresa?");
   }

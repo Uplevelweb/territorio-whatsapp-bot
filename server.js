@@ -40,6 +40,7 @@ const {
   FLOW_API_KEY,             // credenciales de flow.cl, para cobrar los planes
   FLOW_SECRET_KEY,
   TAREA_CLAVE,              // clave inventada para que solo el reloj de Supabase pueda llamar a /tareas/*
+  MERCADOPUBLICO_TICKET,    // el mismo ticket que ya usan alertador.py y el Panel de Oportunidades
   PORT,
 } = process.env;
 
@@ -1054,6 +1055,131 @@ app.get("/tareas/sincronizar-flow", async (req, res) => {
     console.log(`✅ Sincronizacion de morosidad con Flow: ${emailsAtrasados.size} cliente(s) atrasado(s).`);
   } catch (error) {
     console.error("Error sincronizando morosidad con Flow:", error);
+  }
+});
+
+// ================= Analizar un proceso puntual (17-09-2026) ================
+// Modulo para el panel de Territorio, solo planes Plus y Premium: el
+// suscriptor escribe un numero de proceso (licitacion o compra agil) y
+// recibe la misma ficha que ya arma el correo diario (alertador.py), pero
+// al instante y para ese proceso puntual, con una sugerencia de la IA sobre
+// si conviene postular. Vive aca (no en Supabase) porque necesita esperar
+// la respuesta de dos APIs externas en el momento -pg_net de Supabase es
+// asincrono por diseno (encola la llamada y la respuesta llega despues a
+// una tabla aparte), no sirve para "pedir y devolver ya" en una sola
+// consulta del panel.
+const V1_MP = "https://api.mercadopublico.cl/servicios/v1/publico";
+
+async function pedirDetalleMP(endpoint, codigo) {
+  const r = await fetch(`${V1_MP}/${endpoint}.json?codigo=${encodeURIComponent(codigo)}&ticket=${encodeURIComponent(MERCADOPUBLICO_TICKET)}`);
+  if (!r.ok) return null;
+  const datos = await r.json();
+  const lista = Array.isArray(datos?.Listado) ? datos.Listado : (Array.isArray(datos) ? datos : []);
+  return lista[0] || null;
+}
+
+function formatoFecha(iso) {
+  return iso ? String(iso).slice(0, 16).replace("T", " ") : null;
+}
+
+async function analizarProceso(codigo) {
+  // Se prueba primero como licitacion y, si no aparece, como compra agil/OC
+  // -un mismo numero de proceso no repite entre las dos APIs-.
+  let detalle = await pedirDetalleMP("licitaciones", codigo);
+  let tipo = "Licitación";
+  if (!detalle) {
+    detalle = await pedirDetalleMP("ordenesdecompra", codigo);
+    tipo = "Compra Ágil";
+  }
+  if (!detalle) {
+    return { ok: false, motivo: "No encontramos ese número de proceso en Mercado Público. Revisa que esté bien escrito." };
+  }
+
+  const comprador = detalle.Comprador || {};
+  const fechas = detalle.Fechas || {};
+  const visita = fechas.FechaVisitaTerreno || "";
+  const items = Array.isArray(detalle.Items?.Listado)
+    ? detalle.Items.Listado.slice(0, 6).map(i => i.NombreProducto || i.Descripcion).filter(Boolean)
+    : [];
+
+  const ficha = {
+    codigo,
+    tipo,
+    nombre: detalle.Nombre || detalle.Descripcion || "",
+    organismo: comprador.NombreOrganismo || "",
+    unidad: comprador.NombreUnidad || "",
+    region: comprador.RegionUnidad || "",
+    publicada: formatoFecha(fechas.FechaPublicacion),
+    cierre: formatoFecha(fechas.FechaCierre),
+    visita: visita ? formatoFecha(visita) : null,
+    direccion_visita: detalle.DireccionVisita || null,
+    items,
+  };
+
+  const sugerencia = await pedirSugerenciaIA(ficha);
+  return { ok: true, ficha, sugerencia };
+}
+
+async function pedirSugerenciaIA(ficha) {
+  const prompt = `Eres un asesor comercial de Mercado Publico en Chile. Con estos datos reales de una oportunidad, escribe en español: (1) un resumen de 2-3 lineas de que se trata, (2) una sugerencia directa sobre si conviene postular y por que. Si hay visita a terreno obligatoria, dile que sin asistir queda descalificado sin importar la oferta. No inventes datos que no esten aca; si algo no viene, dilo con naturalidad. Datos:\n${JSON.stringify(ficha, null, 2)}`;
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
+      body: JSON.stringify({ model: MODELO_IA, max_tokens: 350, messages: [{ role: "user", content: prompt }] }),
+    });
+    if (!r.ok) { console.error("Error IA analizar-proceso:", await r.text()); return null; }
+    const datos = await r.json();
+    return datos?.content?.[0]?.text || null;
+  } catch (e) {
+    console.error("Error IA analizar-proceso:", e);
+    return null;
+  }
+}
+
+// Verifica sesion + plan llamando a la MISMA funcion que ya usa el panel
+// para saber quien es -este modulo es solo Plus/Premium, igual que el
+// resto de "la plataforma".
+async function verificarPremiumOPlus(token) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/panel_quien_soy`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ p_token: token }),
+  });
+  if (!r.ok) return null;
+  const filas = await r.json();
+  const yo = filas?.[0];
+  if (!yo || !["plus", "premium"].includes(yo.plan)) return null;
+  return yo;
+}
+
+const ORIGEN_PANEL = "https://territorio.uplevelweb.art";
+
+app.options("/panel/analizar-proceso", (_req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+
+app.post("/panel/analizar-proceso", async (req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  const { token, codigo } = req.body || {};
+  if (!token || !codigo) {
+    return res.status(400).json({ ok: false, motivo: "Falta el token o el código de proceso." });
+  }
+
+  const yo = await verificarPremiumOPlus(token);
+  if (!yo) {
+    return res.status(403).json({ ok: false, motivo: "Esta función es solo para el plan Plus o Premium." });
+  }
+
+  try {
+    const resultado = await analizarProceso(String(codigo).trim());
+    res.json(resultado);
+  } catch (e) {
+    console.error("Error en /panel/analizar-proceso:", e);
+    res.status(500).json({ ok: false, motivo: "No pudimos analizar ese proceso ahora. Inténtalo de nuevo en un momento." });
   }
 });
 

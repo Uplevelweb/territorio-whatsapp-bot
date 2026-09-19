@@ -41,6 +41,7 @@ const {
   FLOW_SECRET_KEY,
   TAREA_CLAVE,              // clave inventada para que solo el reloj de Supabase pueda llamar a /tareas/*
   MERCADOPUBLICO_TICKET,    // el mismo ticket que ya usan alertador.py y el Panel de Oportunidades
+  WHATSAPP_TEMPLATE_ALERTA, // nombre EXACTO de la plantilla aprobada en Meta Business Manager (ver mas abajo)
   PORT,
 } = process.env;
 
@@ -103,7 +104,12 @@ async function cargarConversacion(telefono) {
 async function sesionDe(telefono) {
   if (sesiones.has(telefono)) return sesiones.get(telefono);
   const guardada = await cargarConversacion(telefono);
-  const sesion = guardada || { paso: "menu", datos: {}, historial: [] };
+  // 18-09-2026: el default de una conversacion nueva era "menu" -antes eso
+  // significaba "menu de Territorio", asi que un contacto nuevo cuyo primer
+  // mensaje no empezara con "hola" caia directo en la IA de Territorio sin
+  // pasar por el cruce de entrada. Ahora el default queda vacio y el chequeo
+  // de "hola"/"menu" de mas abajo (manejarTexto) lo trata igual que un saludo.
+  const sesion = guardada || { paso: "", datos: {}, historial: [] };
   sesiones.set(telefono, sesion);
   return sesion;
 }
@@ -125,6 +131,36 @@ async function enviar(cuerpo) {
 
 function textoA(telefono, texto) {
   return enviar({ to: telefono, type: "text", text: { body: texto } });
+}
+
+// 19-09-2026: la alerta diaria por WhatsApp la manda el NEGOCIO, no es
+// respuesta a un mensaje del cliente -pasa aunque el cliente lleve dias
+// sin escribir-. Meta exige que todo mensaje asi, fuera de la ventana de
+// 24h de una conversacion, use una PLANTILLA aprobada de antemano; un
+// texto libre (textoA) lo rechaza. Por eso esto no reusa textoA.
+//
+// La plantilla tiene que existir YA APROBADA en Meta Business Manager
+// (WhatsApp Manager > Plantillas de mensajes) antes de que esto funcione
+// -eso no lo hace este codigo, lo hace Serling una vez, y Meta tarda de
+// minutos a un dia en aprobarla-. `parametros` son los {{1}}, {{2}}... del
+// cuerpo de la plantilla, en orden.
+function plantillaA(telefono, parametros) {
+  if (!WHATSAPP_TEMPLATE_ALERTA) {
+    console.error("Falta WHATSAPP_TEMPLATE_ALERTA en el entorno: no se puede mandar la alerta.");
+    return Promise.resolve();
+  }
+  return enviar({
+    to: telefono,
+    type: "template",
+    template: {
+      name: WHATSAPP_TEMPLATE_ALERTA,
+      language: { code: "es" },
+      components: [{
+        type: "body",
+        parameters: parametros.map(texto => ({ type: "text", text: texto })),
+      }],
+    },
+  });
 }
 
 // Botones: WhatsApp permite hasta 3 por mensaje. Para el menu de dudas, que
@@ -165,7 +201,7 @@ function imagenA(telefono, url, texto) {
   });
 }
 
-function listaA(telefono, texto, opciones) {
+function listaA(telefono, texto, opciones, tituloSeccion = "Preguntas frecuentes") {
   // WhatsApp rechaza el mensaje ENTERO si un titulo pasa los 24 caracteres
   // -paso el 11-09-2026 con "Ver resumen de Territorio" (26) y la lista
   // completa dejo de mandarse sin que se notara desde afuera-. Se avisa
@@ -184,21 +220,72 @@ function listaA(telefono, texto, opciones) {
       body: { text: texto },
       action: {
         button: "Ver opciones",
-        sections: [{ title: "Preguntas frecuentes", rows: opciones.map(o => ({ id: o.id, title: o.titulo })) }],
+        sections: [{ title: tituloSeccion, rows: opciones.map(o => ({ id: o.id, title: o.titulo })) }],
       },
     },
   });
 }
 
-// --- El menu principal, reusado en varios puntos del arbol -----------------
+// --- El menu de entrada (18-09-2026) ----------------------------------------
+// El numero de WhatsApp es compartido: recibe tanto prospectos de Territorio
+// (el producto) como de Uplevel (la agencia -diseño web y SaaS a medida-).
+// Antes, CUALQUIER mensaje que empezara con "hola" caia directo en el menu
+// de Territorio, aunque viniera del boton de "cotizar una pagina web" de
+// uplevelweb.art. Ahora hay un primer cruce que pregunta que necesita la
+// persona, y de ahi se reparte. Pedido de Serling: "este numero puede ser de
+// soporte, de Territorio o de servicios de Uplevel, hay que filtrar".
 function menuPrincipal(telefono) {
+  return listaA(telefono,
+    "Hola 👋 Te contacta el equipo de soporte de Uplevel. ¿En qué podemos ayudarte?",
+    [
+      { id: "menu_territorio", titulo: "Alertas Mercado Público" },
+      { id: "menu_web", titulo: "Diseño de página web" },
+      { id: "menu_saas", titulo: "Desarrollo de SaaS" },
+      { id: "menu_persona", titulo: "Hablar con una persona" },
+    ],
+    "¿Qué necesitas?");
+}
+
+// El menu que antes era "menuPrincipal": el arbol completo de Territorio
+// (probar gratis / conocer el sistema / ya soy cliente), sin tocarlo. Ahora
+// se entra aca solo despues de elegir "Alertas Mercado Público" en el cruce
+// de arriba, o si el mensaje de entrada ya trae la intencion clara (ver
+// detectarOrigen). Deja la sesion en modo "menu" -conversacion libre con la
+// IA de Territorio- para que el resto del arbol siga exactamente igual.
+function menuTerritorio(telefono, sesion) {
+  if (sesion) sesion.paso = "menu";
   return botonesA(telefono,
-    "Hola, somos Territorio 👋 Te avisamos cada mañana qué licitaciones y compras ágiles del Estado calzan con lo que vendes. ¿En qué te ayudamos?",
+    "Territorio 🧭 es tu radar de Mercado Público: te avisamos cada mañana qué licitaciones y compras ágiles calzan con lo que vendes. ¿En qué te ayudamos?",
     [
       { id: "quiero_probar", titulo: "Quiero probar gratis" },
       { id: "tengo_dudas", titulo: "Conocer el sistema" },
       { id: "ya_soy_cliente", titulo: "Ya soy cliente" },
     ]);
+}
+
+// Detecta la intencion a partir del PRIMER mensaje, cuando ya trae la senal
+// -los botones de uplevelweb.art mandan un texto precargado distinto segun
+// de que tarjeta vienen (ver deploy-project/index.html y /servicios/)-. Si
+// no calza con nada conocido, devuelve null y se muestra el cruce completo.
+// Fragil a proposito y simple: si el texto de los botones de la web cambia,
+// hay que revisar esta funcion tambien.
+function detectarOrigen(texto) {
+  const t = texto.toLowerCase();
+  if (t.includes("página web") || t.includes("pagina web") || t.includes("cotizador")) return "web";
+  if (t.includes("saas") || t.includes("sistema a medida")) return "saas";
+  if (t.includes("territorio") || t.includes("licitac") || t.includes("mercado público") || t.includes("mercado publico") || t.includes("alerta")) return "territorio";
+  return null;
+}
+
+// Arranca la rama de Uplevel (diseño web / SaaS / hablar con una persona):
+// pide en una linea que necesita y el correo (repetido, mismo patron que ya
+// usa Territorio para no perder gente por un typo), y termina derivando
+// directo al equipo -no hay embudo de autoservicio para esto, se cierra a
+// medida-. `origen` es el texto que va a leer Serling en el aviso.
+function iniciarUplevel(telefono, sesion, origen) {
+  sesion.datos = { origenUplevel: origen };
+  sesion.paso = "pedir_motivo_uplevel";
+  return textoA(telefono, "¡Dale! Cuéntame en una línea qué necesitas.");
 }
 
 // --- Llamar a Supabase, igual que el formulario de la web -------------------
@@ -256,6 +343,23 @@ async function notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto)
   } catch (error) {
     console.error("No se pudo registrar/avisar la derivacion por correo:", error);
   }
+}
+
+// Aviso compartido de "derivar a un humano" (18-09-2026): antes vivia
+// entero adentro del manejador de la herramienta de la IA (solo para
+// Territorio). Se saco a una funcion aparte para que la rama de Uplevel
+// (diseño web / SaaS / hablar con una persona, sin IA de por medio) pueda
+// avisar exactamente igual -mismo WhatsApp directo a Serling + mismo
+// respaldo por correo en bot_derivaciones-, sin duplicar el codigo.
+async function derivarAHumano(telefono, motivo, resumen, contacto) {
+  console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${motivo} | Contacto: ${contacto} | Resumen: ${resumen}`);
+  if (NUMERO_DERIVACION) {
+    await textoA(NUMERO_DERIVACION,
+      `🔔 *Derivar a humano*\nDe (WhatsApp): ${telefono}\nRUT/correo: ${contacto}\nMotivo: ${motivo}\nResumen: ${resumen}`);
+  } else {
+    console.error("⚠️ NUMERO_DERIVACION no esta configurado: el aviso de derivacion no se pudo mandar.");
+  }
+  await notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto);
 }
 
 // Busca a quien dice "Ya soy cliente" por su RUT o su correo -acepta el RUT
@@ -608,7 +712,7 @@ async function responderConIA(telefono, sesion, textoUsuario) {
     if (usosDeHerramienta.length === 0) {
       const texto = resultado.content.filter(b => b.type === "text").map(b => b.text).join("\n").trim();
       sesion.historial = recortarHistorial(sesion.historial);
-      return texto ? textoA(telefono, texto) : menuPrincipal(telefono);
+      return texto ? textoA(telefono, texto) : menuTerritorio(telefono, sesion);
     }
 
     const resultadosDeHerramienta = [];
@@ -635,18 +739,11 @@ async function responderConIA(telefono, sesion, textoUsuario) {
             }
           }
         } else if (uso.name === "derivar_a_humano") {
-          console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${uso.input.motivo} | Contacto: ${uso.input.contacto} | Resumen: ${uso.input.resumen}`);
           // Dos avisos en paralelo, para que el prospecto nunca se pierda si
           // uno de los dos falla: WhatsApp directo (rapido) + correo con
           // respaldo en la tabla bot_derivaciones (permanente, se puede
           // revisar despues aunque el WhatsApp nunca haya llegado).
-          if (NUMERO_DERIVACION) {
-            await textoA(NUMERO_DERIVACION,
-              `🔔 *Derivar a humano*\nDe (WhatsApp): ${telefono}\nRUT/correo: ${uso.input.contacto}\nMotivo: ${uso.input.motivo}\nResumen: ${uso.input.resumen}`);
-          } else {
-            console.error("⚠️ NUMERO_DERIVACION no esta configurado: el aviso de derivacion no se pudo mandar.");
-          }
-          await notificarDerivacionPorCorreo(telefono, uso.input.motivo, uso.input.resumen, uso.input.contacto);
+          await derivarAHumano(telefono, uso.input.motivo, uso.input.resumen, uso.input.contacto);
           // Pausa la IA en esta conversacion: hasta que alguien la reactive
           // escribiendo "hola", el bot no vuelve a responder solo, para que
           // no se cruce con lo que conteste una persona del equipo.
@@ -703,10 +800,31 @@ async function manejarTexto(telefono, sesion, texto) {
   // muda una conversacion derivada porque escribio "Hola, quiero probar..."
   // en vez de "hola" a secas-. Ahora basta con que el mensaje EMPIECE con
   // "hola", que es como la gente realmente escribe.
-  if (t === "menu" || t.startsWith("hola")) {
-    sesion.paso = "menu";
+  // 18-09-2026: si ese primer mensaje ya trae la intencion clara -por
+  // ejemplo, el texto precargado de un boton de uplevelweb.art-, se salta
+  // el cruce y entra directo a la rama que corresponde. Si no, se muestra
+  // el menu de entrada completo (ver menuPrincipal). `!sesion.paso` cubre
+  // una conversacion recien creada cuyo primer mensaje no dice "hola".
+  if (!sesion.paso || t === "menu" || t.startsWith("hola")) {
     sesion.historial = [];
+    const origen = detectarOrigen(texto);
+    if (origen === "territorio") return menuTerritorio(telefono, sesion);
+    if (origen === "web") return iniciarUplevel(telefono, sesion, "Diseño de página web");
+    if (origen === "saas") return iniciarUplevel(telefono, sesion, "Desarrollo de SaaS a medida");
+    sesion.paso = "inicio";
     return menuPrincipal(telefono);
+  }
+
+  // En el cruce de entrada (menu principal ya mostrado, esperando que elija
+  // una opcion): si en vez de tocar la lista escribe directo lo que
+  // necesita, se intenta reconocer la intencion antes de insistir con el
+  // menu -para no obligar a nadie a tocar botones si ya dijo lo que quiere-.
+  if (sesion.paso === "inicio") {
+    const origen = detectarOrigen(texto);
+    if (origen === "territorio") return menuTerritorio(telefono, sesion);
+    if (origen === "web") return iniciarUplevel(telefono, sesion, "Diseño de página web");
+    if (origen === "saas") return iniciarUplevel(telefono, sesion, "Desarrollo de SaaS a medida");
+    return textoA(telefono, "Elige una opción de la lista de arriba 👆, o cuéntame con tus palabras qué necesitas.");
   }
 
   // Conversacion ya derivada a una persona: la IA se queda callada -no
@@ -813,7 +931,43 @@ async function manejarTexto(telefono, sesion, texto) {
     return textoA(telefono, "No encontré ese dato en el sistema 🤔 ¿Puedes revisarlo y escribirlo de nuevo? Si el problema sigue, cuéntame qué necesitas igual y avisamos al equipo.");
   }
 
-  // Fuera de un paso reconocido: vuelve al menu en vez de quedarse mudo.
+  // --- Rama Uplevel: diseño web / SaaS / hablar con una persona ------------
+  // Sin IA de por medio, a proposito -pedido de Serling: que el paso de
+  // "hablar con alguien" sea directo y no dependa de que un modelo decida
+  // derivar-. Mismo patron de correo repetido dos veces que ya usa
+  // Territorio en pedir_email/pedir_email_confirmar, para no perder al
+  // prospecto por un typo en el dato que va a usar el equipo para contactarlo.
+  if (sesion.paso === "pedir_motivo_uplevel") {
+    if (texto.trim().length < 3) {
+      return textoA(telefono, "Cuéntame un poco más, aunque sea en una frase corta.");
+    }
+    sesion.datos.motivoUplevel = texto.trim();
+    sesion.paso = "pedir_email_uplevel";
+    return textoA(telefono, "Gracias. ¿Cuál es tu correo, para que el equipo te escriba?");
+  }
+
+  if (sesion.paso === "pedir_email_uplevel") {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) {
+      return textoA(telefono, "Ese correo no me cuadra. ¿Puedes escribirlo de nuevo? (ej: nombre@empresa.cl)");
+    }
+    sesion.datos.emailUplevel = t;
+    sesion.paso = "pedir_email_uplevel_confirmar";
+    return textoA(telefono, "Para evitar errores de tipeo, escríbemelo una vez más.");
+  }
+
+  if (sesion.paso === "pedir_email_uplevel_confirmar") {
+    if (t !== sesion.datos.emailUplevel) {
+      sesion.paso = "pedir_email_uplevel";
+      return textoA(telefono, "Ese correo no coincide con el que escribiste antes. Empecemos de nuevo: ¿cuál es tu correo?");
+    }
+    await derivarAHumano(telefono, sesion.datos.origenUplevel, sesion.datos.motivoUplevel, sesion.datos.emailUplevel);
+    sesion.paso = "derivado";
+    return textoA(telefono, "Listo 🎉 Le avisamos al equipo de Uplevel — en breve te contactan a este WhatsApp o a tu correo.");
+  }
+
+  // Fuera de un paso reconocido: vuelve al menu de entrada en vez de
+  // quedarse mudo (no al de Territorio: no se sabe en que rama iba).
+  sesion.paso = "inicio";
   return menuPrincipal(telefono);
 }
 
@@ -861,13 +1015,13 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   if (id === "ver_resumen") {
     await documentoA(telefono, `${URL_BASE}/territorio-resumen.pdf`, "Territorio.pdf",
       "📄 El resumen de Territorio en una página: cómo funciona, paso a paso, y los 3 planes.");
-    return menuPrincipal(telefono);
+    return menuTerritorio(telefono, sesion);
   }
 
   if (id === "ver_ejemplo") {
     await imagenA(telefono, `${URL_BASE}/asi-se-ve-el-correo.png`,
       "📬 Así llega tu correo cada mañana: la oportunidad que más te calza, destacada arriba, y el resto del día debajo — con N° de proceso, fecha de publicación y de cierre.");
-    return menuPrincipal(telefono);
+    return menuTerritorio(telefono, sesion);
   }
 
   if (id === "duda_precio") {
@@ -877,25 +1031,31 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
       "• *Plus* — $49.990/mes _(el más contratado)_\n" +
       "• *Premium* — a convenir _(equipos y volumen alto)_\n\n" +
       "Los 7 primeros días de cualquier plan son gratis, sin tarjeta.");
-    return menuPrincipal(telefono);
+    return menuTerritorio(telefono, sesion);
   }
 
   if (id === "duda_turnos") {
     await textoA(telefono,
       "🕗 Las alertas llegan a tu correo *dos veces al día*, de lunes a viernes: a las *8:00* y a las *15:00* — tú eliges el turno al inscribirte.");
-    return menuPrincipal(telefono);
+    return menuTerritorio(telefono, sesion);
   }
 
   if (id === "duda_convenio") {
     await textoA(telefono,
       "🏛️ Territorio cubre licitaciones, compras ágiles *y* acciones comerciales de Convenio Marco — todo cruzado con las palabras clave que nos des, para que solo te llegue lo que realmente vendes.");
-    return menuPrincipal(telefono);
+    return menuTerritorio(telefono, sesion);
   }
 
   if (id === "ya_soy_cliente") {
     sesion.paso = "pedir_identificador_cliente";
     return textoA(telefono, "👋 Perfecto. Pásame tu RUT o el correo con el que te inscribiste, para ubicarte en el sistema.");
   }
+
+  // Opciones del menu de entrada (18-09-2026) -------------------------------
+  if (id === "menu_territorio") return menuTerritorio(telefono, sesion);
+  if (id === "menu_web") return iniciarUplevel(telefono, sesion, "Diseño de página web");
+  if (id === "menu_saas") return iniciarUplevel(telefono, sesion, "Desarrollo de SaaS a medida");
+  if (id === "menu_persona") return iniciarUplevel(telefono, sesion, "Quiere hablar con una persona");
 
   if (id === "hora_8") return confirmarInscripcion(telefono, sesion, 8);
   if (id === "hora_15") return confirmarInscripcion(telefono, sesion, 15);
@@ -914,6 +1074,7 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
     return textoA(telefono, "Ya. ¿Cuál es el celular donde sí te podemos ubicar? (con código de área)");
   }
 
+  sesion.paso = "inicio";
   return menuPrincipal(telefono);
 }
 
@@ -1008,9 +1169,79 @@ app.post("/flow/callback", express.urlencoded({ extended: true }), async (req, r
 
     await guardarFlowCustomerId(pendiente.email, estado.customerId);
     await actualizarPlanCliente(pendiente.email, pendiente.plan);
-    await textoA(pendiente.telefono, `🎉 ¡Listo! Tu plan *${pendiente.plan}* ya está activo. Gracias por confiar en Territorio.`);
+    if (pendiente.telefono) {
+      await textoA(pendiente.telefono, `🎉 ¡Listo! Tu plan *${pendiente.plan}* ya está activo. Gracias por confiar en Territorio.`);
+    }
   } catch (error) {
     console.error("Error en /flow/callback:", error);
+  }
+});
+
+// 19-09-2026: pedido de Serling -"ofrecer el enlace de pago" cuando alguien
+// esta vencido, en el panel y en la pagina, no solo dentro de una
+// conversacion de WhatsApp-. Antes el link de Flow SOLO se generaba cuando
+// la IA del bot llamaba a enviar_link_de_pago a mitad de un chat; no existia
+// una forma de pedirlo desde un link comun. Este endpoint hace lo mismo que
+// esa herramienta pero como un GET normal, para poder ponerlo en un <a href>.
+//
+// Que un correo pague no depende de conversar por WhatsApp: por eso NO
+// redirige a WhatsApp en ningun caso, solo a Flow o a una pagina de error.
+app.get("/pagar", async (req, res) => {
+  const email = String(req.query.email || "").trim().toLowerCase();
+  const nombre = String(req.query.nombre || "").trim();
+  const telefono = String(req.query.telefono || "").trim();
+  const plan = String(req.query.plan || "").trim().toLowerCase();
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).send("Falta un correo válido para generar el link de pago.");
+  }
+  const idPlanFlow = FLOW_PLAN_ID[plan];
+  if (!idPlanFlow || !FLOW_API_KEY || !FLOW_SECRET_KEY) {
+    return res.status(503).send("El pago no está disponible en este momento. Escríbenos por WhatsApp y lo coordinamos a mano.");
+  }
+
+  try {
+    const customerId = await obtenerOCrearClienteFlow(email, nombre || email);
+    if (!customerId) {
+      return res.status(502).send("No se pudo generar el link de pago. Intenta de nuevo en un momento.");
+    }
+    const registro = await llamarFlow("/customer/register", {
+      customerId,
+      url_return: `${URL_BASE}/flow/callback`,
+    });
+    if (!registro?.url || !registro?.token) {
+      return res.status(502).send("No se pudo generar el link de pago. Intenta de nuevo.");
+    }
+    pagosPendientes.set(registro.token, { telefono: telefono || null, plan, idPlanFlow, email, nombre });
+    res.redirect(`${registro.url}?token=${registro.token}`);
+  } catch (error) {
+    console.error("Error generando link de pago por /pagar:", error);
+    res.status(500).send("No se pudo generar el link de pago. Intenta de nuevo en un momento.");
+  }
+});
+
+// La alerta diaria por WhatsApp: la llama alertador.py (GitHub Actions),
+// una vez por suscriptor elegible, justo despues de mandarle el correo del
+// dia -mismo dato, mismo momento, dos canales-. Pedido de Serling el
+// 19-09-2026: "si ofrecemos WhatsApp en los 7 dias de prueba y en Plus y
+// Premium, tiene que existir de verdad, no solo en el texto de la pagina".
+//
+// Quien es elegible HOY (lo decide alertador.py antes de llamar aca, no
+// este archivo): prueba gratis vigente (prueba_vence en el futuro, tope
+// duro de 15 dias desde que confirmo, aunque Serling la haya extendido) o
+// plan Plus/Premium activo y al dia. Este endpoint solo manda: no vuelve a
+// decidir si corresponde, para no tener la misma regla escrita dos veces
+// en dos lenguajes distintos.
+app.post("/tareas/enviar-alerta-whatsapp", async (req, res) => {
+  if (!TAREA_CLAVE || req.query.clave !== TAREA_CLAVE) return res.sendStatus(403);
+  const { telefono, parametros } = req.body || {};
+  if (!telefono || !Array.isArray(parametros)) return res.sendStatus(400);
+  try {
+    await plantillaA(telefono, parametros);
+    res.sendStatus(200);
+  } catch (error) {
+    console.error(`Error mandando la alerta de WhatsApp a ${telefono}:`, error);
+    res.sendStatus(500);
   }
 });
 

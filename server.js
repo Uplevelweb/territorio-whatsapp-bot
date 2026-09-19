@@ -793,6 +793,20 @@ async function responderConIA(telefono, sesion, textoUsuario) {
 async function manejarTexto(telefono, sesion, texto) {
   const t = texto.trim().toLowerCase();
 
+  // 19-09-2026: pedido de Serling -"necesito soporte" tiene que caer
+  // SIEMPRE directo a su WhatsApp personal, sin depender del criterio de
+  // la IA ni de en que paso iba la conversacion-. Va primero que cualquier
+  // otra cosa (incluso "derivado" u otro paso a medio llenar), porque es
+  // el mismo texto que llevan ahora los correos ("No respondas este
+  // correo. ¿Necesitas ayuda? Escríbenos por WhatsApp" -> wa.me con
+  // "Necesito soporte" precargado).
+  if (t.includes("soporte")) {
+    const contacto = sesion.datos?.clienteIdentificado?.email || sesion.datos?.email || "no proporcionado";
+    await derivarAHumano(telefono, "pidio_soporte", `Escribió: "${texto.trim()}"`, contacto);
+    sesion.paso = "derivado";
+    return textoA(telefono, "Recibido 🙌 Le avisamos a Serling directo — en un momento te escribe por acá.");
+  }
+
   // "hola"/"menu" siempre reinician la conversacion, sea cual sea el paso en
   // que iba -es la salida de emergencia si alguien se pierde a mitad de un
   // llenado de datos o de una charla con la IA-.

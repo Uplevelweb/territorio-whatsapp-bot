@@ -399,6 +399,24 @@ async function guardarFlowCustomerId(email, customerId) {
   }
 }
 
+// 20-09-2026: guarda el subscriptionId de Flow y la fecha del proximo cobro
+// -pedido de Serling: "un campo que haga saber si el suscriptor esta al dia
+// y cuanto le queda de suscripcion"-. al_dia ya existia (bot_sincronizar_al_dia);
+// esto agrega el "cuanto le queda". next_invoice_date viene directo en la
+// respuesta de subscription/create y de subscription/get -mismo objeto
+// Subscription en los dos, documentado en flow.cl/docs/api.html-.
+async function guardarFlowSubscripcion(email, subscriptionId, proximoCobro) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_guardar_flow_subscripcion`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_email: email, p_subscription_id: subscriptionId, p_proximo_cobro: proximoCobro || null }),
+    });
+  } catch (error) {
+    console.error("No se pudo guardar la suscripcion de Flow:", error);
+  }
+}
+
 async function actualizarPlanCliente(email, plan) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_actualizar_plan`, {
@@ -1184,6 +1202,7 @@ app.post("/flow/callback", express.urlencoded({ extended: true }), async (req, r
     }
 
     await guardarFlowCustomerId(pendiente.email, estado.customerId);
+    await guardarFlowSubscripcion(pendiente.email, suscripcion.subscriptionId, suscripcion.next_invoice_date);
     await actualizarPlanCliente(pendiente.email, pendiente.plan);
     if (pendiente.telefono) {
       await textoA(pendiente.telefono, `🎉 ¡Listo! Tu plan *${pendiente.plan}* ya está activo. Gracias por confiar en Territorio.`);
@@ -1300,6 +1319,26 @@ app.get("/tareas/sincronizar-flow", async (req, res) => {
 
     await sincronizarAlDia([...emailsAtrasados]);
     console.log(`✅ Sincronizacion de morosidad con Flow: ${emailsAtrasados.size} cliente(s) atrasado(s).`);
+
+    // 20-09-2026: de paso, refresca "cuanto le queda" a cada suscripcion viva.
+    // Es la misma corrida diaria -no se agrega un segundo reloj-, solo un
+    // paso mas: por cada suscripcion que ya quedo guardada (se guardo al
+    // activarse el plan, en /flow/callback), se le pregunta a Flow su fecha
+    // de proximo cobro actualizada y se guarda de nuevo.
+    const listado = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_listar_suscripciones_flow`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      body: "{}",
+    }).then(r => r.json()).catch(() => []);
+
+    for (const fila of (Array.isArray(listado) ? listado : [])) {
+      if (!fila?.flow_subscription_id) continue;
+      const suscripcion = await llamarFlow("/subscription/get", { subscriptionId: fila.flow_subscription_id }, "GET");
+      if (suscripcion?.next_invoice_date) {
+        await guardarFlowSubscripcion(fila.email, fila.flow_subscription_id, suscripcion.next_invoice_date);
+      }
+    }
+    console.log(`✅ Proximo cobro actualizado para ${listado.length || 0} suscripcion(es).`);
   } catch (error) {
     console.error("Error sincronizando morosidad con Flow:", error);
   }

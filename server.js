@@ -737,7 +737,7 @@ async function responderConIA(telefono, sesion, textoUsuario) {
             } else if (resultado.yaExistia) {
               salida = "Ya estaba registrado antes. Se actualizaron sus datos (palabras clave, hora). Dile que sus alertas siguen llegando igual, sin duplicados -no es una inscripcion nueva.";
             } else {
-              salida = "Inscripcion nueva, exitosa.";
+              salida = "Inscripcion nueva, exitosa. Avisale que le llega un correo AHORA MISMO para confirmar su direccion, y que revise tambien spam o promociones si no lo ve en un par de minutos.";
             }
           }
         } else if (uso.name === "derivar_a_humano") {
@@ -1003,7 +1003,7 @@ async function confirmarInscripcion(telefono, sesion, hora) {
       `Listo${nombre ? ", " + nombre : ""} 👋 Ya tenías una cuenta con este correo — actualizamos tus palabras clave y tu hora. Sigues recibiendo tu alerta cada mañana a las ${hora}:00, sin nada duplicado.`);
   }
   return textoA(telefono,
-    `Listo, ${nombre} 🎉 Quedaste inscrito con la prueba gratis de 7 días. Mañana a las ${hora}:00 te llega el primer correo con lo que encontramos para ti.`);
+    `Listo, ${nombre} 🎉 Quedaste inscrito con la prueba gratis de 7 días. Te llega un correo ahora mismo para confirmar tu dirección —revisa también spam o promociones si no lo ves enseguida—. Mañana a las ${hora}:00 te llega tu primera alerta.`);
 }
 
 // --- Respuestas a botones y listas -------------------------------------------

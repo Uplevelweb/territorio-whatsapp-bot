@@ -285,7 +285,7 @@ function detectarOrigen(texto) {
 function iniciarUplevel(telefono, sesion, origen) {
   sesion.datos = { origenUplevel: origen };
   sesion.paso = "pedir_motivo_uplevel";
-  return textoA(telefono, "¡Dale! Cuéntame en una línea qué necesitas.");
+  return textoA(telefono, "¡Perfecto! Cuéntame en una línea qué necesitas.");
 }
 
 // --- Llamar a Supabase, igual que el formulario de la web -------------------
@@ -524,8 +524,10 @@ PLANES:
 Los 7 primeros días de cualquier plan son gratis, sin tarjeta.
 
 CÓMO DEBES CONVERSAR:
-- Natural, cercano, en español de Chile. Nada de menús ni listas de opciones
-  numeradas: conversa como alguien que conoce el sistema a fondo.
+- Natural, cercano, en español NEUTRO -sin modismos regionales de ningún
+  país (nada de "vos", "tenés", "che", "parcero", ni chilenismos como
+  "cachai" o "po"). Nada de menús ni listas de opciones numeradas: conversa
+  como alguien que conoce el sistema a fondo.
 - Mensajes cortos, como en WhatsApp (dos o tres frases, no párrafos largos).
   Usa *negrita* con asteriscos para lo importante, no encabezados de markdown.
 - Responde cualquier duda sobre el sistema con libertad, usando SOLO la
@@ -1011,7 +1013,7 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   if (id === "quiero_probar") {
     sesion.paso = "pedir_email";
     sesion.datos = {};
-    return textoA(telefono, "Dale. Para inscribirte necesito 3 datos rápidos. Primero: ¿cuál es tu correo?");
+    return textoA(telefono, "Perfecto. Para inscribirte necesito 3 datos rápidos. Primero: ¿cuál es tu correo?");
   }
 
   if (id === "tengo_dudas") {

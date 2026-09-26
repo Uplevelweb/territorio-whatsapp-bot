@@ -48,6 +48,28 @@ se pegan las mismas variables del `.env` en su panel, y ellos entregan una
 dirección `https://tu-bot.onrender.com` ya pública. Avísame cuando tengas la
 cuenta creada en cualquiera de los dos y te ayudo a dejarlo andando ahí.
 
+### 3.1 Paso extra desde el 26-09-2026: instalar el navegador de Playwright
+
+El módulo "Analiza tu Licitación o Compra Ágil" ahora abre un navegador sin
+pantalla (Playwright + Chromium) para leer el buscador de reclamos y la
+ficha completa de la licitación en mercadopublico.cl -son páginas que arman
+su contenido con JavaScript, no se pueden leer con un simple `fetch`-.
+
+Eso significa que en el panel de Render, en el **Build Command** del
+servicio, hay que agregar la instalación del navegador (Render no lo trae
+instalado por defecto):
+
+```
+npm install && npx playwright install --with-deps chromium
+```
+
+Sin este paso el servidor prende igual (nada se rompe), pero el análisis
+profundo de reclamos y bases falla en silencio -el resto del bot sigue
+funcionando normal, solo esa parte queda incompleta-. Esto también sube un
+poco la RAM que usa el servicio y el tiempo del build; en el plan gratuito
+de Render debería seguir andando, pero si notas que se pone lento o se cae,
+avísame.
+
 ## 4. Conectar el webhook en Meta
 
 En el panel de tu app (developers.facebook.com → tu app → WhatsApp →

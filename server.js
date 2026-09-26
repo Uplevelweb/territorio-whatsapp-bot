@@ -1354,6 +1354,8 @@ app.get("/tareas/sincronizar-flow", async (req, res) => {
 // asincrono por diseno (encola la llamada y la respuesta llega despues a
 // una tabla aparte), no sirve para "pedir y devolver ya" en una sola
 // consulta del panel.
+const { contarReclamosDelAnio, leerBasesLicitacion } = require("./analisis_profundo");
+
 const V1_MP = "https://api.mercadopublico.cl/servicios/v1/publico";
 
 async function pedirDetalleMP(endpoint, codigo) {
@@ -1402,17 +1404,36 @@ async function analizarProceso(codigo) {
     items,
   };
 
-  const sugerencia = await pedirSugerenciaIA(ficha);
+  // 26-09-2026, pedido de Serling: profundizar el analisis con cuantos
+  // reclamos tiene el organismo (solo del año fiscal en curso) y, cuando es
+  // licitacion, el contenido real de las bases -no solo la ficha basica de
+  // arriba-. Las dos cosas se piden en paralelo porque son independientes;
+  // si cualquiera falla (el sitio de MP no respondio, esta caido, etc.) el
+  // analisis sigue igual con lo que si se pudo conseguir, nunca se cae
+  // entero por esto.
+  const anioReclamos = new Date().getFullYear();
+  const [reclamosDelAnio, basesInfo] = await Promise.all([
+    contarReclamosDelAnio(ficha.organismo).catch(() => null),
+    tipo === "Licitación" ? leerBasesLicitacion(codigo).catch(() => ({ bases: null })) : Promise.resolve({ bases: null }),
+  ]);
+  ficha.reclamos_anio_fiscal = reclamosDelAnio;
+  ficha.anio_reclamos = anioReclamos;
+
+  const sugerencia = await pedirSugerenciaIA(ficha, basesInfo && basesInfo.bases);
   return { ok: true, ficha, sugerencia };
 }
 
-async function pedirSugerenciaIA(ficha) {
-  const prompt = `Eres un asesor comercial de Mercado Publico en Chile. Con estos datos reales de una oportunidad, escribe en español: (1) un resumen de 2-3 lineas de que se trata, (2) una sugerencia directa sobre si conviene postular y por que. Si hay visita a terreno obligatoria, dile que sin asistir queda descalificado sin importar la oferta. No inventes datos que no esten aca; si algo no viene, dilo con naturalidad. Datos:\n${JSON.stringify(ficha, null, 2)}`;
+async function pedirSugerenciaIA(ficha, basesTexto) {
+  const prompt = `Eres un asesor comercial de Mercado Publico en Chile. Con estos datos reales de una oportunidad, escribe en español un analisis breve con estas partes, cada una bien diferenciada: (1) un resumen de 2-3 lineas de que se trata, (2) una sugerencia de propuesta concreta -que enfatizar, que preparar, si aplica- para tener mejores chances de ganarla, (3) una recomendacion directa de si conviene postular o no y por que. Como parte del analisis de riesgo del negocio, comenta cuantos reclamos registra el organismo comprador durante ${ficha.anio_reclamos} (dato: ${ficha.reclamos_anio_fiscal === null || ficha.reclamos_anio_fiscal === undefined ? "no se pudo obtener" : ficha.reclamos_anio_fiscal + " reclamos"}) -si el numero es alto coméntalo como una señal de alerta razonable (por ejemplo, atrasos en el pago), sin exagerar ni asustar, y si no se pudo obtener simplemente no lo menciones-. Si hay visita a terreno obligatoria, dile que sin asistir queda descalificado sin importar la oferta. No inventes datos que no esten aca; si algo no viene, dilo con naturalidad.
+
+Datos de la ficha:
+${JSON.stringify(ficha, null, 2)}
+${basesTexto ? `\nContenido real de las bases de la licitacion (usalo para hablar de los criterios de evaluacion con su ponderacion, garantias exigidas, plazos de pago y cualquier requisito relevante que aparezca):\n${basesTexto}` : ""}`;
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
-      body: JSON.stringify({ model: MODELO_IA, max_tokens: 350, messages: [{ role: "user", content: prompt }] }),
+      body: JSON.stringify({ model: MODELO_IA, max_tokens: 600, messages: [{ role: "user", content: prompt }] }),
     });
     if (!r.ok) { console.error("Error IA analizar-proceso:", await r.text()); return null; }
     const datos = await r.json();

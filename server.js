@@ -1354,7 +1354,13 @@ app.get("/tareas/sincronizar-flow", async (req, res) => {
 // asincrono por diseno (encola la llamada y la respuesta llega despues a
 // una tabla aparte), no sirve para "pedir y devolver ya" en una sola
 // consulta del panel.
-const { contarReclamosDelAnio, leerBasesLicitacion } = require("./analisis_profundo");
+const { contarReclamosDelAnio, leerBasesLicitacion, obtenerLinkAdjuntos } = require("./analisis_profundo");
+const multer = require("multer");
+const pdfParse = require("pdf-parse");
+// El PDF que sube el cliente (ver mas abajo) nunca se guarda en disco: se
+// procesa en memoria y se descarta apenas se le saca el texto -no hay que
+// almacenar documentos de licitaciones de terceros en el servidor del bot.
+const subidaEnMemoria = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 const V1_MP = "https://api.mercadopublico.cl/servicios/v1/publico";
 
@@ -1412,12 +1418,21 @@ async function analizarProceso(codigo) {
   // analisis sigue igual con lo que si se pudo conseguir, nunca se cae
   // entero por esto.
   const anioReclamos = new Date().getFullYear();
-  const [reclamosDelAnio, basesInfo] = await Promise.all([
+  const [reclamosDelAnio, basesInfo, enlaceAdjuntos] = await Promise.all([
     contarReclamosDelAnio(ficha.organismo).catch(() => null),
     tipo === "Licitación" ? leerBasesLicitacion(codigo).catch(() => ({ bases: null })) : Promise.resolve({ bases: null }),
+    obtenerLinkAdjuntos(codigo, tipo).catch(() => null),
   ]);
   ficha.reclamos_anio_fiscal = reclamosDelAnio;
   ficha.anio_reclamos = anioReclamos;
+  // 26-09-2026, pedido de Serling: los adjuntos reales (formularios, bases
+  // tecnicas en PDF, a veces un .zip) exigen resolver un captcha en el sitio
+  // de Mercado Publico -no se pueden bajar solos sin arriesgar que le
+  // bloqueen la IP al bot-. Se le entrega al cliente el link ya armado del
+  // visor para que el mismo haga ese clic y baje el archivo; si despues lo
+  // sube de vuelta en /panel/analizar-adjunto, la IA profundiza el analisis
+  // con el contenido real de ese documento.
+  ficha.enlace_adjuntos = enlaceAdjuntos;
 
   const sugerencia = await pedirSugerenciaIA(ficha, basesInfo && basesInfo.bases);
   return { ok: true, ficha, sugerencia };
@@ -1487,6 +1502,99 @@ app.post("/panel/analizar-proceso", async (req, res) => {
   } catch (e) {
     console.error("Error en /panel/analizar-proceso:", e);
     res.status(500).json({ ok: false, motivo: "No pudimos analizar ese proceso ahora. Inténtalo de nuevo en un momento." });
+  }
+});
+
+// ========== Análisis profundo con el PDF de adjuntos (26-09-2026) ==========
+// Segundo paso, opcional, del modulo de arriba: el cliente ya reviso
+// `ficha.enlace_adjuntos`, resolvio el captcha el mismo y bajo el PDF real
+// (formularios/anexos o bases tecnicas). Lo sube aca y la IA compara ese
+// contenido real contra la sugerencia inicial -letra chica, formularios que
+// hay que llenar, plazos o garantias que no aparecian en el texto de la
+// ficha-. El archivo se procesa en memoria (ver `subidaEnMemoria` arriba) y
+// se descarta apenas termina la funcion: no se guarda en ningun lado.
+async function pedirAnalisisProfundoIA(ficha, textoPdf) {
+  const recorte = textoPdf.slice(0, 12000); // igual criterio que las bases: generoso pero acotado
+  const prompt = `Eres un asesor comercial de Mercado Publico en Chile. Ya le diste a este cliente un analisis inicial de esta oportunidad con la ficha basica. Ahora te comparto el CONTENIDO REAL de un documento adjunto que el descargo (un formulario, anexo o las bases tecnicas en PDF) para profundizar. En español, breve y concreto: (1) señala cualquier requisito, formulario a llenar, plazo, garantia o condicion que este documento agrega y que NO era obvio solo con la ficha basica, (2) si hay algo que podria descalificar la oferta si se pasa por alto, dilo con claridad, (3) cierra con si esto cambia o refuerza la recomendacion de postular. No repitas el analisis inicial completo, solo lo nuevo que aporta este documento. Si el texto extraido viene incompleto o cortado, trabaja igual con lo que hay y dilo con naturalidad si algo relevante parece faltar.
+
+Ficha de la oportunidad:
+${JSON.stringify(ficha, null, 2)}
+
+Contenido extraido del documento adjunto:
+${recorte}`;
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
+      body: JSON.stringify({ model: MODELO_IA, max_tokens: 600, messages: [{ role: "user", content: prompt }] }),
+    });
+    if (!r.ok) { console.error("Error IA analizar-adjunto:", await r.text()); return null; }
+    const datos = await r.json();
+    return datos?.content?.[0]?.text || null;
+  } catch (e) {
+    console.error("Error IA analizar-adjunto:", e);
+    return null;
+  }
+}
+
+app.options("/panel/analizar-adjunto", (_req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+
+app.post("/panel/analizar-adjunto", subidaEnMemoria.single("archivo"), async (req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  const { token, codigo } = req.body || {};
+  if (!token || !codigo) {
+    return res.status(400).json({ ok: false, motivo: "Falta el token o el código de proceso." });
+  }
+  if (!req.file) {
+    return res.status(400).json({ ok: false, motivo: "No llegó ningún archivo." });
+  }
+  if (req.file.mimetype !== "application/pdf") {
+    return res.status(400).json({ ok: false, motivo: "Por ahora solo aceptamos el documento en PDF (no .zip ni otros formatos)." });
+  }
+
+  const yo = await verificarPremiumOPlus(token);
+  if (!yo) {
+    return res.status(403).json({ ok: false, motivo: "Esta función es solo para el plan Plus o Premium." });
+  }
+
+  try {
+    // Se vuelve a pedir la ficha (liviana, solo la API publica) para que la
+    // IA tenga contexto fresco de la oportunidad al comparar contra el PDF.
+    let detalle = await pedirDetalleMP("licitaciones", String(codigo).trim());
+    let tipo = "Licitación";
+    if (!detalle) {
+      detalle = await pedirDetalleMP("ordenesdecompra", String(codigo).trim());
+      tipo = "Compra Ágil";
+    }
+    if (!detalle) {
+      return res.status(404).json({ ok: false, motivo: "No encontramos ese número de proceso en Mercado Público." });
+    }
+    const comprador = detalle.Comprador || {};
+    const ficha = {
+      codigo: String(codigo).trim(),
+      tipo,
+      nombre: detalle.Nombre || detalle.Descripcion || "",
+      organismo: comprador.NombreOrganismo || "",
+    };
+
+    const { text: textoPdf } = await pdfParse(req.file.buffer);
+    if (!textoPdf || !textoPdf.trim()) {
+      return res.status(422).json({ ok: false, motivo: "No pudimos leer texto de ese PDF (puede ser un escaneo de imagen sin texto seleccionable)." });
+    }
+
+    const analisis = await pedirAnalisisProfundoIA(ficha, textoPdf);
+    if (!analisis) {
+      return res.status(500).json({ ok: false, motivo: "No pudimos generar el análisis ahora. Inténtalo de nuevo en un momento." });
+    }
+    res.json({ ok: true, analisis });
+  } catch (e) {
+    console.error("Error en /panel/analizar-adjunto:", e);
+    res.status(500).json({ ok: false, motivo: "No pudimos procesar ese archivo ahora. Inténtalo de nuevo en un momento." });
   }
 });
 

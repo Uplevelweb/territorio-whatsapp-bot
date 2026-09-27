@@ -131,4 +131,68 @@ async function leerBasesLicitacion(codigo) {
   }
 }
 
-module.exports = { contarReclamosDelAnio, leerBasesLicitacion };
+// --- Link directo a "Ver adjuntos" (26-09-2026, pedido de Serling) ----------
+// Los adjuntos reales (formularios/anexos, bases tecnicas en PDF, a veces un
+// .zip con el decreto) NO se pueden descargar solos: la propia licitacion
+// 4768-48-LE26 lo demostro -el visor de Mercado Publico exige resolver un
+// captcha antes de "Descargar seleccionados"-. Intentar resolver ese captcha
+// por software es poco confiable (esta hecho para resistir OCR) y arriesgado
+// -si Mercado Publico detecta el patron y bloquea la IP del bot, se cae la
+// alerta diaria, que es la base de todo Territorio, no solo esta mejora-.
+//
+// Enfoque acordado en su lugar: automatizar SOLO la parte sin captcha -abrir
+// la ficha, hacer el clic que dispara el visor de adjuntos, y quedarse con la
+// URL del popup que se abre (ViewAttachmentLC.aspx?enc=...)-, y entregarle ese
+// link ya armado al cliente. El cliente hace un solo clic, resuelve el
+// captcha el mismo (es su decision de negocio, no algo que el bot deba
+// esconder) y baja el PDF. Luego lo sube de vuelta a Territorio para el
+// analisis profundo (ver /panel/analizar-adjunto en server.js).
+async function obtenerLinkAdjuntos(codigo, tipo) {
+  if (tipo !== "Licitación") return null; // las compras agiles no tienen este visor
+  const navegador = await obtenerNavegador();
+  const pagina = await navegador.newPage();
+  try {
+    await pagina.goto(
+      `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(codigo)}`,
+      { waitUntil: "networkidle", timeout: 25000 }
+    );
+
+    // El boton "Ver adjuntos" es un <input type="image"> que hace postback
+    // (no trae un href directo, a diferencia de iconos como "Foro" o
+    // "Historial"); se identifica por su imagen/alt/title, probado a mano el
+    // 26-09-2026 con la licitacion 4768-48-LE26.
+    const boton = await pagina.$(
+      [
+        'input[type="image"][src*="adjunt" i]',
+        'input[type="image"][alt*="adjunt" i]',
+        'input[type="image"][title*="adjunt" i]',
+        'input[type="image"][src*="anexo" i]',
+        'input[type="image"][alt*="anexo" i]',
+        'input[type="image"][title*="anexo" i]',
+      ].join(", ")
+    );
+    if (!boton) return null; // sin adjuntos visibles, o el sitio cambio de formato
+
+    const [popup] = await Promise.all([
+      pagina.waitForEvent("popup", { timeout: 8000 }).catch(() => null),
+      boton.click(),
+    ]);
+    if (!popup) return null;
+    await popup.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => null);
+    const url = popup.url();
+    await popup.close().catch(() => null);
+
+    // Verificacion minima de que de verdad es el visor de adjuntos y no otra
+    // ventana -si Mercado Publico cambia el flujo, mejor no entregar un link
+    // que no sirve-.
+    if (!/ViewAttachmentLC\.aspx/i.test(url)) return null;
+    return url;
+  } catch (e) {
+    console.error("[analisis_profundo] Error obteniendo link de adjuntos:", e.message || e);
+    return null;
+  } finally {
+    await pagina.close().catch(() => null);
+  }
+}
+
+module.exports = { contarReclamosDelAnio, leerBasesLicitacion, obtenerLinkAdjuntos };

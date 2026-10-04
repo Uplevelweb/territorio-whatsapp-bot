@@ -20,7 +20,9 @@
 const express = require("express");
 const crypto = require("crypto");
 const app = express();
-app.use(express.json());
+// Se guarda el cuerpo crudo: la firma de Meta (X-Hub-Signature-256) se calcula
+// sobre los bytes exactos que llegaron, no sobre el JSON ya interpretado.
+app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // El resumen en PDF vive en /public y se manda por WhatsApp como archivo
 // (no un link a una pagina web) — pedido de Serling el 11-09-2026: un link
@@ -39,11 +41,50 @@ const {
   NUMERO_DERIVACION,        // numero de WhatsApp (con codigo de pais, sin +) que recibe los avisos de "derivar a un humano"
   FLOW_API_KEY,             // credenciales de flow.cl, para cobrar los planes
   FLOW_SECRET_KEY,
+  META_APP_SECRET,          // "App Secret" de la app de Meta: sirve para comprobar que cada mensaje del webhook viene de Meta
+  SUPABASE_CLAVE_SECRETA,   // llave secreta de Supabase (sb_secret_...). Si existe, se usa en vez de la publica
   TAREA_CLAVE,              // clave inventada para que solo el reloj de Supabase pueda llamar a /tareas/*
   MERCADOPUBLICO_TICKET,    // el mismo ticket que ya usan alertador.py y el Panel de Oportunidades
   WHATSAPP_TEMPLATE_ALERTA, // nombre EXACTO de la plantilla aprobada en Meta Business Manager (ver mas abajo)
   PORT,
 } = process.env;
+
+// Llave con la que el bot habla con Supabase. Con la secreta, las funciones
+// bot_* se pueden cerrar al publico; mientras no exista, sigue la publica.
+const SB_KEY = SUPABASE_CLAVE_SECRETA || SUPABASE_CLAVE_PUBLICA;
+
+// Comparacion de claves en tiempo constante (evita adivinar letra por letra).
+function iguales(a, b) {
+  const x = Buffer.from(String(a || "")), y = Buffer.from(String(b || ""));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+// La clave de las tareas del reloj puede llegar por cabecera (preferido: no
+// queda escrita en los registros de acceso) o por la direccion (compatibilidad).
+function claveTareaOk(req) {
+  if (!TAREA_CLAVE) return false;
+  return iguales(req.get("x-tarea-clave"), TAREA_CLAVE) || iguales(req.query.clave, TAREA_CLAVE);
+}
+
+// Firma de Meta. Si todavia no se configuro META_APP_SECRET se deja pasar (para
+// no cortar el servicio), pero se avisa en el registro.
+function firmaMetaValida(req) {
+  if (!META_APP_SECRET) return true;
+  const recibida = req.get("x-hub-signature-256") || "";
+  const esperada = "sha256=" + crypto.createHmac("sha256", META_APP_SECRET).update(req.rawBody || Buffer.alloc(0)).digest("hex");
+  return iguales(recibida, esperada);
+}
+
+// Tope de mensajes por telefono: 30 por minuto. Lo que pase de ahi se ignora.
+const ventanaMensajes = new Map();
+function superaLimite(telefono) {
+  const ahora = Date.now(), v = (ventanaMensajes.get(telefono) || []).filter(t => ahora - t < 60000);
+  v.push(ahora); ventanaMensajes.set(telefono, v);
+  if (ventanaMensajes.size > 5000) for (const [k, arr] of ventanaMensajes) if (!arr.length || ahora - arr[arr.length - 1] > 60000) ventanaMensajes.delete(k);
+  return v.length > 30;
+}
+
+if (!META_APP_SECRET) console.warn("⚠️ Falta META_APP_SECRET: el webhook no verifica la firma de Meta.");
+if (!SUPABASE_CLAVE_SECRETA) console.warn("⚠️ Falta SUPABASE_CLAVE_SECRETA: el bot usa la llave publica de Supabase.");
 
 const FLOW_BASE = "https://www.flow.cl/api";
 // El identificador de cada plan tal cual quedo creado en el panel de Flow
@@ -68,8 +109,8 @@ async function guardarConversacion(telefono, sesion) {
     await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_guardar_conversacion`, {
       method: "POST",
       headers: {
-        "apikey": SUPABASE_CLAVE_PUBLICA,
-        "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+        "apikey": SB_KEY,
+        "Authorization": `Bearer ${SB_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ p_telefono: telefono, p_estado: sesion }),
@@ -84,8 +125,8 @@ async function cargarConversacion(telefono) {
     const respuesta = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_leer_conversacion`, {
       method: "POST",
       headers: {
-        "apikey": SUPABASE_CLAVE_PUBLICA,
-        "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+        "apikey": SB_KEY,
+        "Authorization": `Bearer ${SB_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ p_telefono: telefono }),
@@ -299,8 +340,8 @@ async function inscribirAlerta(datos, telefonoWhatsApp) {
   const respuesta = await fetch(`${SUPABASE_URL}/rest/v1/rpc/inscribir_alerta`, {
     method: "POST",
     headers: {
-      "apikey": SUPABASE_CLAVE_PUBLICA,
-      "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+      "apikey": SB_KEY,
+      "Authorization": `Bearer ${SB_KEY}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -334,8 +375,8 @@ async function notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto)
     await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_derivar`, {
       method: "POST",
       headers: {
-        "apikey": SUPABASE_CLAVE_PUBLICA,
-        "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+        "apikey": SB_KEY,
+        "Authorization": `Bearer ${SB_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ p_telefono: telefono, p_motivo: motivo, p_resumen: resumen, p_contacto: contacto }),
@@ -372,8 +413,8 @@ async function identificarCliente(identificador) {
     const respuesta = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_identificar_cliente`, {
       method: "POST",
       headers: {
-        "apikey": SUPABASE_CLAVE_PUBLICA,
-        "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`,
+        "apikey": SB_KEY,
+        "Authorization": `Bearer ${SB_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ p_identificador: identificador }),
@@ -391,7 +432,7 @@ async function guardarFlowCustomerId(email, customerId) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_guardar_flow_customer_id`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ p_email: email, p_customer_id: customerId }),
     });
   } catch (error) {
@@ -409,7 +450,7 @@ async function guardarFlowSubscripcion(email, subscriptionId, proximoCobro) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_guardar_flow_subscripcion`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ p_email: email, p_subscription_id: subscriptionId, p_proximo_cobro: proximoCobro || null }),
     });
   } catch (error) {
@@ -421,7 +462,7 @@ async function actualizarPlanCliente(email, plan) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_actualizar_plan`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ p_email: email, p_plan: plan }),
     });
   } catch (error) {
@@ -433,7 +474,7 @@ async function sincronizarAlDia(emailsAtrasados) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_sincronizar_al_dia`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ p_emails_atrasados: emailsAtrasados }),
     });
   } catch (error) {
@@ -1129,6 +1170,11 @@ app.get("/webhook", (req, res) => {
 
 // Aca llega cada mensaje real.
 app.post("/webhook", async (req, res) => {
+  // Solo Meta puede escribirle al bot: se comprueba su firma antes de hacer nada.
+  if (!firmaMetaValida(req)) {
+    console.error("⚠️ Webhook rechazado: la firma de Meta no coincide.");
+    return res.sendStatus(401);
+  }
   // Responder 200 de inmediato: si Meta no recibe la confirmacion rapido,
   // reintenta el mismo mensaje y se procesaria dos veces.
   res.sendStatus(200);
@@ -1139,6 +1185,7 @@ app.post("/webhook", async (req, res) => {
     if (!mensaje) return; // puede ser un aviso de "mensaje leido", no un mensaje nuevo
 
     const telefono = mensaje.from;
+    if (superaLimite(telefono)) { console.error(`⚠️ ${telefono} supero el tope de mensajes por minuto; se ignora.`); return; }
     const sesion = await sesionDe(telefono);
     console.log(`📩 Mensaje de ${telefono} (tipo: ${mensaje.type}, paso: ${sesion.paso})`);
 
@@ -1268,7 +1315,7 @@ app.get("/pagar", async (req, res) => {
 // decidir si corresponde, para no tener la misma regla escrita dos veces
 // en dos lenguajes distintos.
 app.post("/tareas/enviar-alerta-whatsapp", async (req, res) => {
-  if (!TAREA_CLAVE || req.query.clave !== TAREA_CLAVE) return res.sendStatus(403);
+  if (!claveTareaOk(req)) return res.sendStatus(403);
   const { telefono, parametros } = req.body || {};
   if (!telefono || !Array.isArray(parametros)) return res.sendStatus(400);
   try {
@@ -1288,7 +1335,7 @@ app.post("/tareas/enviar-alerta-whatsapp", async (req, res) => {
 // Supabase. Pedido de Serling el 12-09-2026: "debe existir una condicion
 // que verifique que el usuario esta al dia" para dar o restringir acceso.
 app.get("/tareas/sincronizar-flow", async (req, res) => {
-  if (!TAREA_CLAVE || req.query.clave !== TAREA_CLAVE) return res.sendStatus(403);
+  if (!claveTareaOk(req)) return res.sendStatus(403);
   res.sendStatus(200); // el reloj no necesita esperar a que termine
 
   try {
@@ -1327,7 +1374,7 @@ app.get("/tareas/sincronizar-flow", async (req, res) => {
     // de proximo cobro actualizada y se guarda de nuevo.
     const listado = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_listar_suscripciones_flow`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
       body: "{}",
     }).then(r => r.json()).catch(() => []);
 
@@ -1465,7 +1512,7 @@ ${basesTexto ? `\nContenido real de las bases de la licitacion (usalo para habla
 async function verificarPremiumOPlus(token) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/panel_quien_soy`, {
     method: "POST",
-    headers: { "apikey": SUPABASE_CLAVE_PUBLICA, "Authorization": `Bearer ${SUPABASE_CLAVE_PUBLICA}`, "Content-Type": "application/json" },
+    headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ p_token: token }),
   });
   if (!r.ok) return null;

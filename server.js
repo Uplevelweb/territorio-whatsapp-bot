@@ -59,10 +59,10 @@ function iguales(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 // La clave de las tareas del reloj puede llegar por cabecera (preferido: no
-// queda escrita en los registros de acceso) o por la direccion (compatibilidad).
+// queda escrita en los registros de acceso). Ya no se acepta por la direccion.
 function claveTareaOk(req) {
   if (!TAREA_CLAVE) return false;
-  return iguales(req.get("x-tarea-clave"), TAREA_CLAVE) || iguales(req.query.clave, TAREA_CLAVE);
+  return iguales(req.get("x-tarea-clave"), TAREA_CLAVE);
 }
 
 // Firma de Meta. Si todavia no se configuro META_APP_SECRET se deja pasar (para
@@ -90,6 +90,11 @@ const FLOW_BASE = "https://www.flow.cl/api";
 // El identificador de cada plan tal cual quedo creado en el panel de Flow
 // (Suscripciones > Planes) el 12-09-2026.
 const FLOW_PLAN_ID = { inicio: "TERRITORIO_INICIO", plus: "TERRITORIO_PLUS", premium: "TERRITORIO_PREMIUM" };
+
+// Nombre que ve el cliente (igual que la landing). Los codigos internos
+// (inicio/plus/premium) siguen siendo los de la base de datos y los de Flow.
+const NOMBRE_PLAN = { inicio: "Alerta", plus: "Inteligencia", premium: "Acompañado" };
+const nombrePlan = (codigo) => NOMBRE_PLAN[String(codigo || "").toLowerCase()] || codigo;
 
 const URL_BASE = URL_PUBLICA || "https://territorio-whatsapp-bot.onrender.com";
 
@@ -520,7 +525,44 @@ async function llamarFlow(ruta, params, metodo = "POST") {
 // que hay que recordar aca a quien pertenece-. En memoria: si el servidor
 // se reinicia a mitad del registro, esa persona simplemente vuelve a pedir
 // el link, no es grave.
-const pagosPendientes = new Map(); // token -> { telefono, plan, email, nombre }
+// Respaldado en la tabla bot_pagos_pendientes: si Render reinicia a mitad del
+// registro de la tarjeta, el pago igual se completa.
+const _pagosEnMemoria = new Map(); // respaldo rapido (y red de seguridad si la BD falla)
+const pagosPendientes = {
+  async set(token, datos) {
+    _pagosEnMemoria.set(token, datos);
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_guardar_pago_pendiente`, {
+        method: "POST",
+        headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ p_token: token, p_datos: datos }),
+      });
+    } catch (error) { console.error("No se pudo guardar el pago pendiente:", error); }
+  },
+  // Lee y borra en un solo paso (un token solo se usa una vez).
+  async take(token) {
+    if (_pagosEnMemoria.has(token)) {
+      const d = _pagosEnMemoria.get(token);
+      _pagosEnMemoria.delete(token);
+      // Tambien se borra de la BD para que no quede un token reutilizable.
+      fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_tomar_pago_pendiente`, {
+        method: "POST",
+        headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ p_token: token }),
+      }).catch(() => {});
+      return d;
+    }
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_tomar_pago_pendiente`, {
+        method: "POST",
+        headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ p_token: token }),
+      });
+      if (!r.ok) return null;
+      return (await r.json()) || null;
+    } catch (error) { console.error("No se pudo leer el pago pendiente:", error); return null; }
+  },
+};
 
 // Busca el flow_customer_id ya guardado (evita crear un cliente duplicado
 // en Flow cada vez que alguien vuelve a pagar); si no existe, crea uno.
@@ -566,7 +608,7 @@ QUÉ VENDE TERRITORIO, EN CONCRETO:
    avisa si hay visita a terreno obligatoria (con fecha y dirección), muestra
    los criterios de evaluación ordenados por peso, el monto y las fechas de
    cierre. Todo dentro de la misma Alerta Diaria.
-5. Email marketing integrado (plan Premium): envío de correos masivos a la
+5. Email marketing integrado (plan Acompañado): envío de correos masivos a la
    cartera del cliente, con una cuenta de Gmail ya configurada — sin
    plataforma ni suscripción adicional.
 6. A nivel interno de Uplevel: cruce en tiempo real de todas las operaciones
@@ -577,9 +619,9 @@ Universo al que apunta: casi 40.000 proveedores que hoy le venden al Estado
 por alguna de las seis vías de Mercado Público.
 
 PLANES:
-- Inicio: $19.990/mes (oferta de lanzamiento)
-- Plus: $49.990/mes (el más contratado)
-- Premium: a convenir (equipos y volumen alto, incluye el email marketing)
+- Plan Alerta: $19.999/mes (precio de lanzamiento)
+- Plan Inteligencia: $49.999/mes (con análisis de Terri)
+- Plan Acompañado: $199.999/mes (te acompañamos en la gestión; incluye el email marketing)
 Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.
 
 CÓMO DEBES CONVERSAR:
@@ -672,7 +714,7 @@ const HERRAMIENTAS_IA = [
   },
   {
     name: "enviar_link_de_pago",
-    description: "Manda el link para contratar/pagar un plan (Inicio, Plus o Premium) via Flow. Usalo cuando el cliente quiera pagar, mejorar de plan, o no tenga plan activo y quiera contratar.",
+    description: "Manda el link para contratar/pagar un plan (Alerta, Inteligencia o Acompañado; codigos inicio, plus, premium) via Flow. Usalo cuando el cliente quiera pagar, mejorar de plan, o no tenga plan activo y quiera contratar.",
     input_schema: {
       type: "object",
       properties: {
@@ -726,7 +768,7 @@ function recortarHistorial(historial) {
 function manualPara(sesion) {
   const cliente = sesion.datos?.clienteIdentificado;
   if (!cliente) return MANUAL_TERRITORIO;
-  const plan = cliente.plan || "sin plan pagado (prueba gratis o ninguno)";
+  const plan = (cliente.plan ? nombrePlan(cliente.plan) : "") || "sin plan pagado (prueba gratis o ninguno)";
 
   // al_dia llega null si nunca tuvo plan (prueba gratis) -eso no es una
   // deuda, asi que solo se restringe cuando es explicitamente false: alguien
@@ -750,10 +792,10 @@ regularizar. Una vez que pague, todo vuelve a la normalidad solo.`.trim();
 NOTA SOBRE ESTE CLIENTE (ya se identifico, no se lo vuelvas a pedir):
 Nombre: ${cliente.nombre || "no registrado"}. Correo: ${cliente.email || "no registrado"}.
 Plan actual: ${plan}.
-Aplica las reglas de soporte de ESE plan: si es Inicio o no tiene plan
+Aplica las reglas de soporte de ESE plan: si es Alerta o no tiene plan
 pagado, su soporte incluido es por correo (y puede agendar una hora de
-Atencion Personalizada a $24.990 si quiere hablar con alguien); si es Plus
-o Premium, puede escribir sus dudas libremente y usar derivar_a_humano sin
+Atencion Personalizada a $24.990 si quiere hablar con alguien); si es Inteligencia
+o Acompañado, puede escribir sus dudas libremente y usar derivar_a_humano sin
 problema. Si quiere pagar o mejorar de plan, ya tienes su correo y nombre:
 usa enviar_link_de_pago sin volver a pedirselos.`.trim();
 }
@@ -828,9 +870,9 @@ async function responderConIA(telefono, sesion, textoUsuario) {
               if (!registro?.url || !registro?.token) {
                 salida = "No se pudo generar el link de pago. Avisale al cliente que lo intentemos de nuevo.";
               } else {
-                pagosPendientes.set(registro.token, { telefono, plan, idPlanFlow, email, nombre });
+                await pagosPendientes.set(registro.token, { telefono, plan, idPlanFlow, email, nombre });
                 await textoA(telefono,
-                  `💳 Para activar el plan *${plan}*, registra tu tarjeta aquí (es Flow, seguro, cobro recurrente mensual):\n${registro.url}?token=${registro.token}`);
+                  `💳 Para activar el plan *${nombrePlan(plan)}*, registra tu tarjeta aquí (es Flow, seguro, cobro recurrente mensual):\n${registro.url}?token=${registro.token}`);
                 salida = "Link de pago enviado. Avisale al cliente que apenas registre su tarjeta, el plan queda activo solo.";
               }
             }
@@ -1353,8 +1395,7 @@ app.post("/flow/callback", express.urlencoded({ extended: true }), async (req, r
     const token = req.body?.token;
     if (!token) return;
 
-    const pendiente = pagosPendientes.get(token);
-    pagosPendientes.delete(token);
+    const pendiente = await pagosPendientes.take(token);
 
     const estado = await llamarFlow("/customer/getRegisterStatus", { token }, "GET");
     const registrado = estado && (estado.status === "1" || estado.status === 1);
@@ -1378,7 +1419,7 @@ app.post("/flow/callback", express.urlencoded({ extended: true }), async (req, r
       console.error("No se pudo crear la suscripcion en Flow:", suscripcion);
       await textoA(pendiente.telefono, "Tu tarjeta quedó registrada, pero hubo un problema activando el plan. Le avisamos al equipo para resolverlo ahora mismo.");
       if (NUMERO_DERIVACION) {
-        await textoA(NUMERO_DERIVACION, `⚠️ Tarjeta registrada pero fallo subscription/create.\nCliente: ${pendiente.telefono} (${pendiente.email})\nPlan: ${pendiente.plan}`);
+        await textoA(NUMERO_DERIVACION, `⚠️ Tarjeta registrada pero fallo subscription/create.\nCliente: ${pendiente.telefono} (${pendiente.email})\nPlan: ${nombrePlan(pendiente.plan)}`);
       }
       return;
     }
@@ -1429,7 +1470,7 @@ app.get("/pagar", async (req, res) => {
     if (!registro?.url || !registro?.token) {
       return res.status(502).send("No se pudo generar el link de pago. Intenta de nuevo.");
     }
-    pagosPendientes.set(registro.token, { telefono: telefono || null, plan, idPlanFlow, email, nombre });
+    await pagosPendientes.set(registro.token, { telefono: telefono || null, plan, idPlanFlow, email, nombre });
     res.redirect(`${registro.url}?token=${registro.token}`);
   } catch (error) {
     console.error("Error generando link de pago por /pagar:", error);
@@ -1675,7 +1716,7 @@ app.post("/panel/analizar-proceso", async (req, res) => {
 
   const yo = await verificarPremiumOPlus(token);
   if (!yo) {
-    return res.status(403).json({ ok: false, motivo: "Esta función es solo para el plan Plus o Premium." });
+    return res.status(403).json({ ok: false, motivo: "Esta función es solo para los planes Inteligencia y Acompañado." });
   }
 
   try {
@@ -1741,7 +1782,7 @@ app.post("/panel/analizar-adjunto", subidaEnMemoria.single("archivo"), async (re
 
   const yo = await verificarPremiumOPlus(token);
   if (!yo) {
-    return res.status(403).json({ ok: false, motivo: "Esta función es solo para el plan Plus o Premium." });
+    return res.status(403).json({ ok: false, motivo: "Esta función es solo para los planes Inteligencia y Acompañado." });
   }
 
   try {

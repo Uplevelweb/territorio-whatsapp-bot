@@ -580,7 +580,7 @@ PLANES:
 - Inicio: $19.990/mes (oferta de lanzamiento)
 - Plus: $49.990/mes (el más contratado)
 - Premium: a convenir (equipos y volumen alto, incluye el email marketing)
-Los 7 primeros días de cualquier plan son gratis, sin tarjeta.
+Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.
 
 CÓMO DEBES CONVERSAR:
 - Natural, cercano, en español NEUTRO -sin modismos regionales de ningún
@@ -947,8 +947,21 @@ async function manejarTexto(telefono, sesion, texto) {
       return textoA(telefono, "Ese dato no me parece un nombre o empresa. ¿Puedes escribirlo de nuevo?");
     }
     sesion.datos.nombre = posibleNombre;
-    sesion.paso = "pedir_palabras";
-    return textoA(telefono, "¿Qué vendes o en qué rubro trabajas? Escríbelo con palabras separadas por coma (ej: aseo, ferretería, notebooks).");
+    sesion.datos.rubros = [];
+    sesion.datos.palabrasExtra = [];
+    return menuFamilias(telefono, sesion);
+  }
+
+  // Semi cerrado: despues de elegir rubros, palabras propias opcionales.
+  if (sesion.paso === "pedir_palabras_extra") {
+    sesion.datos.palabrasExtra = texto.split(",").map(p => p.trim().toLowerCase()).filter(p => p.length > 1).slice(0, 15);
+    sesion.datos.palabras = palabrasDeRubros(sesion);
+    return preguntarTelefonoContacto(telefono, sesion);
+  }
+
+  // Si escribe en vez de tocar la lista de rubros, se le recuerda tocarla.
+  if (sesion.paso === "elegir_familia" || sesion.paso === "elegir_mas_rubros") {
+    return textoA(telefono, "Elige una opción tocando la lista o los botones de arriba 👆. Si lo tuyo no aparece, toca *Otro (lo escribo)*.");
   }
 
   if (sesion.paso === "pedir_palabras") {
@@ -1049,6 +1062,14 @@ async function manejarTexto(telefono, sesion, texto) {
 async function confirmarInscripcion(telefono, sesion, hora) {
   sesion.datos.hora = hora;
   const resultado = await inscribirAlerta(sesion.datos, telefono);
+  if (resultado.ok && (sesion.datos.rubros || []).length) {
+    // Registro de los rubros elegidos (analisis posterior). No bloquea la inscripcion.
+    fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_guardar_rubros`, {
+      method: "POST",
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_email: sesion.datos.email, p_rubros: sesion.datos.rubros }),
+    }).catch(e => console.warn("bot_guardar_rubros:", e.message));
+  }
   sesion.paso = "menu";
   const nombre = sesion.datos.nombre?.split(" ")[0] || "";
   if (!resultado.ok) {
@@ -1062,12 +1083,126 @@ async function confirmarInscripcion(telefono, sesion, hora) {
       `Listo${nombre ? ", " + nombre : ""} 👋 Ya tenías una cuenta con este correo — actualizamos tus palabras clave y tu hora. Sigues recibiendo tu alerta cada mañana a las ${hora}:00, sin nada duplicado.`);
   }
   return textoA(telefono,
-    `Listo, ${nombre} 🎉 Quedaste inscrito con la prueba gratis de 7 días. Te llega un correo ahora mismo para confirmar tu dirección —revisa también spam o promociones si no lo ves enseguida—. Mañana a las ${hora}:00 te llega tu primera alerta.`);
+    `Listo, ${nombre} 🎉 Quedaste inscrito con la prueba gratis de 14 días. Te llega un correo ahora mismo para confirmar tu dirección —revisa también spam o promociones si no lo ves enseguida—. Mañana a las ${hora}:00 te llega tu primera alerta.`);
+}
+
+// --- Rubros cerrados (05-10-2026) -------------------------------------------
+// Pedido de Serling: respuestas cerradas o semi cerradas para el registro, sobre
+// todo para el rubro. El usuario toca opciones en vez de escribir: primero la
+// familia, luego uno o mas rubros; al final puede afinar con palabras propias
+// (semi cerrado). Cada rubro trae palabras semilla que se agregan a sus
+// palabras clave, asi el motor de alertas funciona igual que antes.
+// La fuente es catalogo_rubros.json (la misma tabla catalogo_rubros en Supabase).
+const CATALOGO = require("./catalogo_rubros.json");
+const MAX_RUBROS = 6;
+const rubroPorId = {};
+CATALOGO.forEach(f => f.rubros.forEach(r => { rubroPorId[r.id] = { ...r, familia: f.titulo }; }));
+
+function menuFamilias(telefono, sesion) {
+  sesion.paso = "elegir_familia";
+  const filas = CATALOGO.map(f => ({ id: "fam_" + f.id, titulo: f.titulo }));
+  filas.push({ id: "fam_otro", titulo: "Otro (lo escribo)" });
+  return listaA(telefono,
+    "Elige el *rubro* de lo que vendes. Puedes sumar hasta " + MAX_RUBROS + " 👇",
+    filas, "Tu rubro");
+}
+
+function menuRubros(telefono, sesion, familiaId) {
+  const f = CATALOGO.find(x => x.id === familiaId);
+  if (!f) return menuFamilias(telefono, sesion);
+  const filas = f.rubros.map(r => ({ id: "rub_" + r.id, titulo: r.titulo }));
+  filas.push({ id: "fam_volver", titulo: "⬅ Volver" });
+  return listaA(telefono, "*" + f.titulo + "* — ¿qué vendes exactamente?", filas, f.titulo);
+}
+
+function resumenRubros(sesion) {
+  return (sesion.datos.rubros || []).map(id => "• " + rubroPorId[id].titulo).join("\n");
+}
+
+async function agregarRubro(telefono, sesion, rubroId) {
+  const r = rubroPorId[rubroId];
+  if (!r) return menuFamilias(telefono, sesion);
+  sesion.datos.rubros = sesion.datos.rubros || [];
+  if (!sesion.datos.rubros.includes(rubroId)) {
+    if (sesion.datos.rubros.length >= MAX_RUBROS) {
+      return botonesA(telefono, "Ya tienes " + MAX_RUBROS + " rubros, que es el máximo. ¿Seguimos?", [
+        { id: "seguir_rubros", titulo: "Sí, seguir" },
+      ]);
+    }
+    sesion.datos.rubros.push(rubroId);
+  }
+  sesion.datos.ultimoRubro = rubroId;
+  sesion.paso = "elegir_mas_rubros";
+  return botonesA(telefono,
+    "✅ Agregado: *" + r.titulo + "*\n\nTus rubros:\n" + resumenRubros(sesion) + "\n\n¿Quieres sumar otro?",
+    [
+      { id: "mas_rubros", titulo: "Agregar otro" },
+      { id: "ver_sugeridos", titulo: "Ver sugeridos" },
+      { id: "seguir_rubros", titulo: "Listo, seguir" },
+    ]);
+}
+
+// Sugerencia: rubros que suelen venderse junto al ultimo elegido y que la
+// persona aun no tiene. Son relaciones definidas a mano en el catalogo; la
+// siguiente fase las cruza con lo que realmente se publica en Mercado Publico.
+function sugeridosDe(sesion) {
+  const base = rubroPorId[sesion.datos.ultimoRubro];
+  if (!base) return [];
+  return base.complementarios.filter(id => rubroPorId[id] && !(sesion.datos.rubros || []).includes(id)).slice(0, 4);
+}
+
+function palabrasDeRubros(sesion) {
+  const set = new Set();
+  (sesion.datos.rubros || []).forEach(id => rubroPorId[id].palabras.forEach(w => set.add(w.toLowerCase())));
+  (sesion.datos.palabrasExtra || []).forEach(w => set.add(w));
+  return [...set];
+}
+
+function pedirPalabrasExtra(telefono, sesion) {
+  sesion.paso = "pedir_palabras_extra";
+  const ej = [];
+  (sesion.datos.rubros || []).slice(0, 2).forEach(id => ej.push(rubroPorId[id].palabras[0]));
+  return botonesA(telefono,
+    "Perfecto 👌 Con tus rubros ya te buscamos " + palabrasDeRubros(sesion).length + " palabras en licitaciones y compras ágiles.\n\n" +
+    "¿Quieres afinar con productos específicos? Escríbelos separados por coma (ej: " + (ej.join(", ") || "resmas, tóner") + "), o toca *Omitir*.",
+    [{ id: "omitir_palabras", titulo: "Omitir" }]);
+}
+
+function preguntarTelefonoContacto(telefono, sesion) {
+  sesion.paso = "pedir_telefono";
+  return botonesA(telefono, "Una última: ¿este WhatsApp es tu número de contacto, o estás escribiendo desde un teléfono prestado?", [
+    { id: "telefono_este_mismo", titulo: "Es mi número" },
+    { id: "telefono_otro", titulo: "Es prestado" },
+  ]);
 }
 
 // --- Respuestas a botones y listas -------------------------------------------
 async function manejarInteractivo(telefono, sesion, interactivo) {
   const id = interactivo.button_reply?.id || interactivo.list_reply?.id;
+
+  // Rubros cerrados (ver arriba)
+  if (id === "fam_otro") {
+    sesion.paso = "pedir_palabras";
+    return textoA(telefono, "¿Qué vendes o en qué rubro trabajas? Escríbelo con palabras separadas por coma (ej: aseo, ferretería, notebooks).");
+  }
+  if (id === "fam_volver" || id === "mas_rubros") return menuFamilias(telefono, sesion);
+  if (id && id.startsWith("fam_")) return menuRubros(telefono, sesion, id.slice(4));
+  if (id && id.startsWith("rub_")) return agregarRubro(telefono, sesion, id.slice(4));
+  if (id === "ver_sugeridos") {
+    const sug = sugeridosDe(sesion);
+    if (sug.length === 0) return menuFamilias(telefono, sesion);
+    const filas = sug.map(i => ({ id: "rub_" + i, titulo: rubroPorId[i].titulo }));
+    filas.push({ id: "mas_rubros", titulo: "Ver todos los rubros" });
+    return listaA(telefono, "💡 Quienes venden *" + rubroPorId[sesion.datos.ultimoRubro].titulo + "* suelen sumar estos rubros:", filas, "Sugeridos");
+  }
+  if (id === "seguir_rubros") {
+    if (!(sesion.datos.rubros || []).length) return menuFamilias(telefono, sesion);
+    return pedirPalabrasExtra(telefono, sesion);
+  }
+  if (id === "omitir_palabras") {
+    sesion.datos.palabras = palabrasDeRubros(sesion);
+    return preguntarTelefonoContacto(telefono, sesion);
+  }
 
   if (id === "quiero_probar") {
     sesion.paso = "pedir_email";
@@ -1102,16 +1237,16 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   if (id === "duda_precio") {
     await textoA(telefono,
       "💰 *Planes de Territorio*\n\n" +
-      "• *Inicio* — $19.990/mes _(oferta de lanzamiento)_\n" +
-      "• *Plus* — $49.990/mes _(el más contratado)_\n" +
-      "• *Premium* — a convenir _(equipos y volumen alto)_\n\n" +
-      "Los 7 primeros días de cualquier plan son gratis, sin tarjeta.");
+      "• *Plan Alerta* — $19.999/mes _(precio de lanzamiento)_\n" +
+      "• *Plan Inteligencia* — $49.999/mes _(con análisis de Terri)_\n" +
+      "• *Plan Acompañado* — $199.999/mes _(te acompañamos en la gestión)_\n\n" +
+      "Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.");
     return menuTerritorio(telefono, sesion);
   }
 
   if (id === "duda_turnos") {
     await textoA(telefono,
-      "🕗 Las alertas llegan a tu correo *dos veces al día*, de lunes a viernes: a las *8:00* y a las *15:00* — tú eliges el turno al inscribirte.");
+      "🕗 Las alertas llegan a tu correo *dos veces al día*, de lunes a sábado: a las *8:00* y a las *15:00* — tú eliges el turno al inscribirte.");
     return menuTerritorio(telefono, sesion);
   }
 

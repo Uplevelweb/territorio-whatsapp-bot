@@ -1,0 +1,1132 @@
+[
+ {
+  "id": "alim",
+  "titulo": "Alimentos y abarrotes",
+  "rubros": [
+   {
+    "id": "alim_abarrotes",
+    "titulo": "Abarrotes y víveres",
+    "palabras": [
+     "abarrotes",
+     "víveres",
+     "alimentos",
+     "arroz",
+     "fideos",
+     "aceite"
+    ],
+    "complementarios": [
+     "alim_lacteos",
+     "alim_bebidas",
+     "aseo_productos"
+    ]
+   },
+   {
+    "id": "alim_carnes",
+    "titulo": "Carnes y pescados",
+    "palabras": [
+     "carne",
+     "pollo",
+     "pescado",
+     "cerdo",
+     "vacuno"
+    ],
+    "complementarios": [
+     "alim_frutas",
+     "alim_abarrotes"
+    ]
+   },
+   {
+    "id": "alim_frutas",
+    "titulo": "Frutas y verduras",
+    "palabras": [
+     "frutas",
+     "verduras",
+     "hortalizas",
+     "fruta fresca"
+    ],
+    "complementarios": [
+     "alim_abarrotes",
+     "alim_carnes"
+    ]
+   },
+   {
+    "id": "alim_pan",
+    "titulo": "Panadería y pastelería",
+    "palabras": [
+     "pan",
+     "panadería",
+     "pastelería",
+     "galletas",
+     "masas"
+    ],
+    "complementarios": [
+     "alim_lacteos",
+     "alim_bebidas"
+    ]
+   },
+   {
+    "id": "alim_lacteos",
+    "titulo": "Lácteos y huevos",
+    "palabras": [
+     "leche",
+     "lácteos",
+     "huevos",
+     "yogurt",
+     "queso"
+    ],
+    "complementarios": [
+     "alim_abarrotes",
+     "alim_pan"
+    ]
+   },
+   {
+    "id": "alim_bebidas",
+    "titulo": "Bebidas y café",
+    "palabras": [
+     "bebidas",
+     "café",
+     "té",
+     "jugos",
+     "agua"
+    ],
+    "complementarios": [
+     "alim_pan",
+     "alim_abarrotes"
+    ]
+   },
+   {
+    "id": "alim_raciones",
+    "titulo": "Colaciones y raciones",
+    "palabras": [
+     "colaciones",
+     "raciones",
+     "almuerzos",
+     "cajas de alimentos"
+    ],
+    "complementarios": [
+     "alim_abarrotes",
+     "serv_eventos"
+    ]
+   },
+   {
+    "id": "alim_escolar",
+    "titulo": "Alimentación escolar",
+    "palabras": [
+     "alimentación escolar",
+     "desayunos",
+     "onces",
+     "pae"
+    ],
+    "complementarios": [
+     "alim_lacteos",
+     "alim_pan"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "aseo",
+  "titulo": "Aseo y limpieza",
+  "rubros": [
+   {
+    "id": "aseo_productos",
+    "titulo": "Productos de aseo",
+    "palabras": [
+     "aseo",
+     "limpieza",
+     "productos de aseo",
+     "artículos de aseo"
+    ],
+    "complementarios": [
+     "aseo_desinf",
+     "aseo_papeles",
+     "aseo_bolsas"
+    ]
+   },
+   {
+    "id": "aseo_papeles",
+    "titulo": "Papeles y toallas",
+    "palabras": [
+     "papel higiénico",
+     "toalla de papel",
+     "servilletas",
+     "papel absorbente"
+    ],
+    "complementarios": [
+     "aseo_dispensadores",
+     "aseo_productos"
+    ]
+   },
+   {
+    "id": "aseo_desinf",
+    "titulo": "Desinfectantes",
+    "palabras": [
+     "desinfectante",
+     "cloro",
+     "detergente",
+     "alcohol gel",
+     "sanitizante"
+    ],
+    "complementarios": [
+     "aseo_productos",
+     "salud_epp"
+    ]
+   },
+   {
+    "id": "aseo_bolsas",
+    "titulo": "Bolsas de basura",
+    "palabras": [
+     "bolsas de basura",
+     "bolsas",
+     "basura",
+     "contenedores"
+    ],
+    "complementarios": [
+     "aseo_productos",
+     "aseo_articulos"
+    ]
+   },
+   {
+    "id": "aseo_articulos",
+    "titulo": "Artículos de limpieza",
+    "palabras": [
+     "escobas",
+     "traperos",
+     "paños",
+     "guantes",
+     "mopas"
+    ],
+    "complementarios": [
+     "aseo_productos",
+     "aseo_bolsas"
+    ]
+   },
+   {
+    "id": "aseo_servicio",
+    "titulo": "Servicio de aseo",
+    "palabras": [
+     "servicio de aseo",
+     "aseo industrial",
+     "aseo y mantención"
+    ],
+    "complementarios": [
+     "serv_mantencion",
+     "serv_areas"
+    ]
+   },
+   {
+    "id": "aseo_dispensadores",
+    "titulo": "Dispensadores",
+    "palabras": [
+     "dispensador",
+     "dispensadores",
+     "jabón líquido",
+     "jabón"
+    ],
+    "complementarios": [
+     "aseo_papeles",
+     "aseo_desinf"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "ofic",
+  "titulo": "Oficina y papelería",
+  "rubros": [
+   {
+    "id": "ofic_papeleria",
+    "titulo": "Papelería y útiles",
+    "palabras": [
+     "papelería",
+     "útiles de oficina",
+     "artículos de oficina",
+     "lápices"
+    ],
+    "complementarios": [
+     "ofic_resmas",
+     "ofic_tintas",
+     "ofic_archivo"
+    ]
+   },
+   {
+    "id": "ofic_resmas",
+    "titulo": "Resmas de papel",
+    "palabras": [
+     "resma",
+     "resmas",
+     "papel fotocopia",
+     "papel carta",
+     "papel oficio"
+    ],
+    "complementarios": [
+     "ofic_tintas",
+     "ofic_papeleria"
+    ]
+   },
+   {
+    "id": "ofic_tintas",
+    "titulo": "Tintas y tóner",
+    "palabras": [
+     "tóner",
+     "toner",
+     "tinta",
+     "cartuchos",
+     "cinta impresora"
+    ],
+    "complementarios": [
+     "tec_impresoras",
+     "ofic_resmas"
+    ]
+   },
+   {
+    "id": "ofic_archivo",
+    "titulo": "Archivadores y carpetas",
+    "palabras": [
+     "archivador",
+     "carpetas",
+     "archivadores",
+     "separadores"
+    ],
+    "complementarios": [
+     "ofic_papeleria",
+     "ofic_escritorio"
+    ]
+   },
+   {
+    "id": "ofic_escolar",
+    "titulo": "Material escolar",
+    "palabras": [
+     "material escolar",
+     "cuadernos",
+     "lápices de colores",
+     "témperas"
+    ],
+    "complementarios": [
+     "ofic_papeleria",
+     "mob_escolar"
+    ]
+   },
+   {
+    "id": "ofic_escritorio",
+    "titulo": "Artículos de escritorio",
+    "palabras": [
+     "artículos escritorio",
+     "corchetera",
+     "perforador",
+     "tijeras",
+     "cinta adhesiva"
+    ],
+    "complementarios": [
+     "ofic_papeleria",
+     "ofic_archivo"
+    ]
+   },
+   {
+    "id": "ofic_timbres",
+    "titulo": "Timbres e impresos",
+    "palabras": [
+     "timbres",
+     "impresos",
+     "formularios",
+     "sellos",
+     "imprenta"
+    ],
+    "complementarios": [
+     "serv_impresion",
+     "ofic_papeleria"
+    ]
+   },
+   {
+    "id": "ofic_libretas",
+    "titulo": "Libretas y agendas",
+    "palabras": [
+     "libretas",
+     "agendas",
+     "cuadernos institucionales",
+     "calendarios"
+    ],
+    "complementarios": [
+     "ofic_merch",
+     "ofic_papeleria"
+    ]
+   },
+   {
+    "id": "ofic_merch",
+    "titulo": "Merchandising y regalos",
+    "palabras": [
+     "merchandising",
+     "regalos corporativos",
+     "artículos promocionales",
+     "llaveros"
+    ],
+    "complementarios": [
+     "ofic_libretas",
+     "vest_trofeos"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "tec",
+  "titulo": "Tecnología y software",
+  "rubros": [
+   {
+    "id": "tec_pc",
+    "titulo": "Notebooks y PC",
+    "palabras": [
+     "notebook",
+     "computador",
+     "pc",
+     "tablet",
+     "computadores"
+    ],
+    "complementarios": [
+     "tec_impresoras",
+     "tec_redes",
+     "tec_soporte"
+    ]
+   },
+   {
+    "id": "tec_impresoras",
+    "titulo": "Impresoras",
+    "palabras": [
+     "impresora",
+     "impresoras",
+     "multifuncional",
+     "fotocopiadora"
+    ],
+    "complementarios": [
+     "ofic_tintas",
+     "tec_pc"
+    ]
+   },
+   {
+    "id": "tec_redes",
+    "titulo": "Redes y cableado",
+    "palabras": [
+     "redes",
+     "cableado",
+     "switch",
+     "router",
+     "wifi",
+     "fibra óptica"
+    ],
+    "complementarios": [
+     "tec_pc",
+     "tec_camaras"
+    ]
+   },
+   {
+    "id": "tec_licencias",
+    "titulo": "Software y licencias",
+    "palabras": [
+     "software",
+     "licencias",
+     "licencia",
+     "antivirus",
+     "office"
+    ],
+    "complementarios": [
+     "tec_soporte",
+     "tec_pc"
+    ]
+   },
+   {
+    "id": "tec_web",
+    "titulo": "Página web y SaaS",
+    "palabras": [
+     "página web",
+     "sitio web",
+     "web",
+     "saas",
+     "wordpress",
+     "sistemas informáticos"
+    ],
+    "complementarios": [
+     "tec_plataformas",
+     "tec_soporte"
+    ]
+   },
+   {
+    "id": "tec_plataformas",
+    "titulo": "Plataformas educativas",
+    "palabras": [
+     "plataforma educativa",
+     "e-learning",
+     "libro de clases digital",
+     "lms"
+    ],
+    "complementarios": [
+     "tec_web",
+     "serv_capacitacion"
+    ]
+   },
+   {
+    "id": "tec_soporte",
+    "titulo": "Soporte informático",
+    "palabras": [
+     "soporte informático",
+     "mantención computacional",
+     "soporte técnico",
+     "helpdesk"
+    ],
+    "complementarios": [
+     "tec_pc",
+     "tec_redes"
+    ]
+   },
+   {
+    "id": "tec_camaras",
+    "titulo": "Cámaras y seguridad",
+    "palabras": [
+     "cámaras",
+     "cctv",
+     "alarmas",
+     "control de acceso"
+    ],
+    "complementarios": [
+     "tec_redes",
+     "serv_vigilancia"
+    ]
+   },
+   {
+    "id": "tec_telefonia",
+    "titulo": "Telefonía",
+    "palabras": [
+     "telefonía",
+     "teléfonos",
+     "central telefónica",
+     "celulares"
+    ],
+    "complementarios": [
+     "tec_redes",
+     "tec_pc"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "mob",
+  "titulo": "Mobiliario y equipos",
+  "rubros": [
+   {
+    "id": "mob_escritorios",
+    "titulo": "Escritorios y sillas",
+    "palabras": [
+     "escritorios",
+     "sillas",
+     "silla de oficina",
+     "mesas"
+    ],
+    "complementarios": [
+     "mob_estanterias",
+     "mob_madera"
+    ]
+   },
+   {
+    "id": "mob_estanterias",
+    "titulo": "Estanterías y libreros",
+    "palabras": [
+     "estanterías",
+     "libreros",
+     "repisas",
+     "muebles de archivo"
+    ],
+    "complementarios": [
+     "mob_escritorios",
+     "ofic_archivo"
+    ]
+   },
+   {
+    "id": "mob_madera",
+    "titulo": "Muebles de madera",
+    "palabras": [
+     "madera",
+     "muebles",
+     "carpintería",
+     "muebles a medida"
+    ],
+    "complementarios": [
+     "mob_escritorios",
+     "mob_estanterias"
+    ]
+   },
+   {
+    "id": "mob_escolar",
+    "titulo": "Mobiliario escolar",
+    "palabras": [
+     "mobiliario escolar",
+     "mesas escolares",
+     "sillas escolares",
+     "pizarras"
+    ],
+    "complementarios": [
+     "ofic_escolar",
+     "mob_escritorios"
+    ]
+   },
+   {
+    "id": "mob_camas",
+    "titulo": "Colchones y camas",
+    "palabras": [
+     "colchones",
+     "camas",
+     "literas",
+     "frazadas"
+    ],
+    "complementarios": [
+     "vest_cama",
+     "mob_madera"
+    ]
+   },
+   {
+    "id": "mob_electro",
+    "titulo": "Electrodomésticos",
+    "palabras": [
+     "electrodomésticos",
+     "refrigerador",
+     "microondas",
+     "estufa",
+     "hervidor"
+    ],
+    "complementarios": [
+     "mob_menaje",
+     "con_climat"
+    ]
+   },
+   {
+    "id": "mob_menaje",
+    "titulo": "Menaje y cocina",
+    "palabras": [
+     "menaje",
+     "utensilios de cocina",
+     "vajilla",
+     "ollas",
+     "loza"
+    ],
+    "complementarios": [
+     "mob_electro",
+     "alim_abarrotes"
+    ]
+   },
+   {
+    "id": "mob_exterior",
+    "titulo": "Mobiliario exterior",
+    "palabras": [
+     "mobiliario exterior",
+     "juegos infantiles",
+     "bancas",
+     "basureros"
+    ],
+    "complementarios": [
+     "con_obras",
+     "serv_areas"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "con",
+  "titulo": "Construcción y obras",
+  "rubros": [
+   {
+    "id": "con_ferreteria",
+    "titulo": "Ferretería",
+    "palabras": [
+     "ferretería",
+     "tornillos",
+     "herramientas manuales",
+     "candados"
+    ],
+    "complementarios": [
+     "con_herramientas",
+     "con_pinturas"
+    ]
+   },
+   {
+    "id": "con_pinturas",
+    "titulo": "Pinturas",
+    "palabras": [
+     "pintura",
+     "pinturas",
+     "esmalte",
+     "látex",
+     "barniz"
+    ],
+    "complementarios": [
+     "con_materiales",
+     "con_ferreteria"
+    ]
+   },
+   {
+    "id": "con_materiales",
+    "titulo": "Materiales de obra",
+    "palabras": [
+     "cemento",
+     "áridos",
+     "fierro",
+     "planchas",
+     "materiales de construcción"
+    ],
+    "complementarios": [
+     "con_obras",
+     "con_pinturas"
+    ]
+   },
+   {
+    "id": "con_electrico",
+    "titulo": "Electricidad y luz",
+    "palabras": [
+     "electricidad",
+     "iluminación",
+     "ampolletas",
+     "luminarias",
+     "cables"
+    ],
+    "complementarios": [
+     "con_gasfiteria",
+     "con_materiales"
+    ]
+   },
+   {
+    "id": "con_gasfiteria",
+    "titulo": "Gasfitería",
+    "palabras": [
+     "gasfitería",
+     "cañerías",
+     "grifería",
+     "sanitarios",
+     "tuberías"
+    ],
+    "complementarios": [
+     "con_electrico",
+     "con_materiales"
+    ]
+   },
+   {
+    "id": "con_obras",
+    "titulo": "Obras menores",
+    "palabras": [
+     "obras menores",
+     "reparación",
+     "remodelación",
+     "construcción",
+     "habilitación"
+    ],
+    "complementarios": [
+     "con_materiales",
+     "serv_mantencion"
+    ]
+   },
+   {
+    "id": "con_herramientas",
+    "titulo": "Herramientas",
+    "palabras": [
+     "herramientas",
+     "taladro",
+     "herramientas eléctricas",
+     "equipos de taller"
+    ],
+    "complementarios": [
+     "con_ferreteria",
+     "salud_epp"
+    ]
+   },
+   {
+    "id": "con_climat",
+    "titulo": "Climatización",
+    "palabras": [
+     "climatización",
+     "aire acondicionado",
+     "calefacción",
+     "estufas",
+     "calefactores"
+    ],
+    "complementarios": [
+     "con_electrico",
+     "mob_electro"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "salud",
+  "titulo": "Salud e insumos",
+  "rubros": [
+   {
+    "id": "salud_insumos",
+    "titulo": "Insumos médicos",
+    "palabras": [
+     "insumos médicos",
+     "jeringas",
+     "gasas",
+     "guantes de examen",
+     "material clínico"
+    ],
+    "complementarios": [
+     "salud_medicamentos",
+     "salud_epp"
+    ]
+   },
+   {
+    "id": "salud_medicamentos",
+    "titulo": "Medicamentos",
+    "palabras": [
+     "medicamentos",
+     "fármacos",
+     "farmacia",
+     "productos farmacéuticos"
+    ],
+    "complementarios": [
+     "salud_insumos",
+     "salud_primeros"
+    ]
+   },
+   {
+    "id": "salud_equipos",
+    "titulo": "Equipos médicos",
+    "palabras": [
+     "equipos médicos",
+     "camilla",
+     "equipamiento clínico",
+     "monitor",
+     "desfibrilador"
+    ],
+    "complementarios": [
+     "salud_insumos",
+     "salud_ortopedia"
+    ]
+   },
+   {
+    "id": "salud_epp",
+    "titulo": "Protección y EPP",
+    "palabras": [
+     "epp",
+     "mascarillas",
+     "elementos de protección personal",
+     "guantes",
+     "cascos"
+    ],
+    "complementarios": [
+     "vest_trabajo",
+     "aseo_desinf"
+    ]
+   },
+   {
+    "id": "salud_odonto",
+    "titulo": "Odontología",
+    "palabras": [
+     "odontología",
+     "insumos dentales",
+     "material dental",
+     "dental"
+    ],
+    "complementarios": [
+     "salud_insumos",
+     "salud_equipos"
+    ]
+   },
+   {
+    "id": "salud_lab",
+    "titulo": "Laboratorio",
+    "palabras": [
+     "laboratorio",
+     "reactivos",
+     "insumos de laboratorio",
+     "exámenes"
+    ],
+    "complementarios": [
+     "salud_insumos",
+     "salud_equipos"
+    ]
+   },
+   {
+    "id": "salud_primeros",
+    "titulo": "Primeros auxilios",
+    "palabras": [
+     "primeros auxilios",
+     "botiquín",
+     "botiquines",
+     "extintores"
+    ],
+    "complementarios": [
+     "salud_insumos",
+     "salud_epp"
+    ]
+   },
+   {
+    "id": "salud_ortopedia",
+    "titulo": "Ortopedia",
+    "palabras": [
+     "ortopedia",
+     "sillas de ruedas",
+     "bastones",
+     "muletas",
+     "ayudas técnicas"
+    ],
+    "complementarios": [
+     "salud_equipos",
+     "salud_insumos"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "vest",
+  "titulo": "Vestuario y textiles",
+  "rubros": [
+   {
+    "id": "vest_uniformes",
+    "titulo": "Uniformes",
+    "palabras": [
+     "uniformes",
+     "uniforme",
+     "buzos",
+     "delantales"
+    ],
+    "complementarios": [
+     "vest_trabajo",
+     "vest_calzado"
+    ]
+   },
+   {
+    "id": "vest_trabajo",
+    "titulo": "Ropa de trabajo",
+    "palabras": [
+     "ropa de trabajo",
+     "overol",
+     "chaquetas",
+     "parkas"
+    ],
+    "complementarios": [
+     "salud_epp",
+     "vest_calzado"
+    ]
+   },
+   {
+    "id": "vest_calzado",
+    "titulo": "Calzado",
+    "palabras": [
+     "calzado",
+     "zapatos de seguridad",
+     "botas",
+     "zapatillas"
+    ],
+    "complementarios": [
+     "vest_trabajo",
+     "vest_uniformes"
+    ]
+   },
+   {
+    "id": "vest_institucional",
+    "titulo": "Ropa institucional",
+    "palabras": [
+     "ropa institucional",
+     "vestuario institucional",
+     "gorros",
+     "polerones"
+    ],
+    "complementarios": [
+     "vest_uniformes",
+     "vest_trofeos"
+    ]
+   },
+   {
+    "id": "vest_cama",
+    "titulo": "Ropa de cama",
+    "palabras": [
+     "ropa de cama",
+     "sábanas",
+     "toallas",
+     "frazadas",
+     "cobertores"
+    ],
+    "complementarios": [
+     "mob_camas",
+     "aseo_papeles"
+    ]
+   },
+   {
+    "id": "vest_banderas",
+    "titulo": "Banderas y estandartes",
+    "palabras": [
+     "banderas",
+     "estandartes",
+     "pendones",
+     "lienzos"
+    ],
+    "complementarios": [
+     "serv_impresion",
+     "vest_institucional"
+    ]
+   },
+   {
+    "id": "vest_bolsas",
+    "titulo": "Bolsas y bolsos",
+    "palabras": [
+     "bolsas tnt",
+     "bolsos",
+     "mochilas",
+     "bolsas reutilizables"
+    ],
+    "complementarios": [
+     "ofic_merch",
+     "serv_impresion"
+    ]
+   },
+   {
+    "id": "vest_trofeos",
+    "titulo": "Trofeos y medallas",
+    "palabras": [
+     "trofeos",
+     "medallas",
+     "galvanos",
+     "reconocimientos",
+     "placas"
+    ],
+    "complementarios": [
+     "ofic_merch",
+     "serv_eventos"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "serv",
+  "titulo": "Servicios",
+  "rubros": [
+   {
+    "id": "serv_vigilancia",
+    "titulo": "Vigilancia y seguridad",
+    "palabras": [
+     "vigilancia",
+     "guardias",
+     "seguridad",
+     "servicio de vigilancia"
+    ],
+    "complementarios": [
+     "tec_camaras",
+     "serv_mantencion"
+    ]
+   },
+   {
+    "id": "serv_mantencion",
+    "titulo": "Mantención",
+    "palabras": [
+     "mantención",
+     "mantenimiento",
+     "reparaciones",
+     "servicio técnico"
+    ],
+    "complementarios": [
+     "con_obras",
+     "aseo_servicio"
+    ]
+   },
+   {
+    "id": "serv_transporte",
+    "titulo": "Transporte y fletes",
+    "palabras": [
+     "transporte",
+     "fletes",
+     "traslado",
+     "arriendo de buses",
+     "mudanza"
+    ],
+    "complementarios": [
+     "serv_arriendo",
+     "serv_eventos"
+    ]
+   },
+   {
+    "id": "serv_arriendo",
+    "titulo": "Arriendo de equipos",
+    "palabras": [
+     "arriendo",
+     "arriendo de equipos",
+     "arriendo de maquinaria",
+     "alquiler"
+    ],
+    "complementarios": [
+     "serv_transporte",
+     "serv_eventos"
+    ]
+   },
+   {
+    "id": "serv_eventos",
+    "titulo": "Eventos y banquetería",
+    "palabras": [
+     "eventos",
+     "banquetería",
+     "coffee break",
+     "catering",
+     "ceremonia"
+    ],
+    "complementarios": [
+     "alim_raciones",
+     "serv_arriendo"
+    ]
+   },
+   {
+    "id": "serv_capacitacion",
+    "titulo": "Capacitación",
+    "palabras": [
+     "capacitación",
+     "cursos",
+     "talleres",
+     "charlas",
+     "asesoría"
+    ],
+    "complementarios": [
+     "tec_plataformas",
+     "serv_consultoria"
+    ]
+   },
+   {
+    "id": "serv_impresion",
+    "titulo": "Impresión y gráfica",
+    "palabras": [
+     "impresión",
+     "gráfica",
+     "diseño gráfico",
+     "imprenta",
+     "letreros"
+    ],
+    "complementarios": [
+     "vest_banderas",
+     "ofic_timbres"
+    ]
+   },
+   {
+    "id": "serv_consultoria",
+    "titulo": "Consultoría",
+    "palabras": [
+     "consultoría",
+     "asesoría técnica",
+     "estudios",
+     "auditoría"
+    ],
+    "complementarios": [
+     "serv_capacitacion",
+     "tec_soporte"
+    ]
+   },
+   {
+    "id": "serv_areas",
+    "titulo": "Áreas verdes",
+    "palabras": [
+     "áreas verdes",
+     "jardinería",
+     "paisajismo",
+     "poda",
+     "mantención de áreas verdes"
+    ],
+    "complementarios": [
+     "aseo_servicio",
+     "mob_exterior"
+    ]
+   }
+  ]
+ }
+]

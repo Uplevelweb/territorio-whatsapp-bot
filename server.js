@@ -1326,7 +1326,7 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
 
   if (id === "ver_ejemplo") {
     await imagenA(telefono, `${URL_BASE}/asi-se-ve-el-correo.png`,
-      "📬 Así llega tu correo cada mañana: la oportunidad que más te calza, destacada arriba, y el resto del día debajo — con N° de proceso, fecha de publicación y de cierre.");
+      "📬 Así llega tu correo, con Terri: quién compra, cuánto compra, quién se lo lleva y con qué te van a evaluar — todos los días a las 8:00 o a las 15:00. (Ejemplo con datos ficticios.)");
     return menuTerritorio(telefono, sesion);
   }
 

@@ -1002,6 +1002,7 @@ async function manejarTexto(telefono, sesion, texto) {
   }
 
   // Si escribe en vez de tocar la lista de rubros, se le recuerda tocarla.
+  if (sesion.paso === "multi_rubros") return procesarMulti(telefono, sesion, texto);
   if (sesion.paso === "elegir_familia" || sesion.paso === "elegir_mas_rubros") {
     return textoA(telefono, "Elige una opción tocando la lista o los botones de arriba 👆. Si lo tuyo no aparece, toca *Otro (lo escribo)*.");
   }
@@ -1136,7 +1137,7 @@ async function confirmarInscripcion(telefono, sesion, hora) {
 // palabras clave, asi el motor de alertas funciona igual que antes.
 // La fuente es catalogo_rubros.json (la misma tabla catalogo_rubros en Supabase).
 const CATALOGO = require("./catalogo_rubros.json");
-const MAX_RUBROS = 6;
+const MAX_RUBROS = 15; // empresas como Emergenza venden en varias familias a la vez
 const rubroPorId = {};
 CATALOGO.forEach(f => f.rubros.forEach(r => { rubroPorId[r.id] = { ...r, familia: f.titulo }; }));
 
@@ -1145,7 +1146,7 @@ function menuFamilias(telefono, sesion) {
   const filas = CATALOGO.map(f => ({ id: "fam_" + f.id, titulo: f.titulo }));
   filas.push({ id: "fam_otro", titulo: "Otro (lo escribo)" });
   return listaA(telefono,
-    "Elige el *rubro* de lo que vendes. Puedes sumar hasta " + MAX_RUBROS + " 👇",
+    "Elige la *familia* de lo que vendes. Puedes sumar varios rubros (hasta " + MAX_RUBROS + "), de una o de varias familias 👇",
     filas, "Tu rubro");
 }
 
@@ -1153,8 +1154,9 @@ function menuRubros(telefono, sesion, familiaId) {
   const f = CATALOGO.find(x => x.id === familiaId);
   if (!f) return menuFamilias(telefono, sesion);
   const filas = f.rubros.map(r => ({ id: "rub_" + r.id, titulo: r.titulo }));
-  filas.push({ id: "fam_volver", titulo: "⬅ Volver" });
-  return listaA(telefono, "*" + f.titulo + "* — ¿qué vendes exactamente?", filas, f.titulo);
+  // WhatsApp admite 10 filas: hay familias con 9 rubros, asi que "Volver" va en los botones de despues.
+  filas.push({ id: "multi_" + f.id, titulo: "✅ Elegir varios" });
+  return listaA(telefono, "*" + f.titulo + "* — ¿qué vendes exactamente? Toca uno, o *Elegir varios* para marcar todos los que vendas de una vez.", filas, f.titulo);
 }
 
 function resumenRubros(sesion) {
@@ -1184,13 +1186,62 @@ async function agregarRubro(telefono, sesion, rubroId) {
     ]);
 }
 
+// --- Multiseleccion por texto (WhatsApp no permite marcar varios en una lista) --
+// Se manda la lista numerada y la persona responde "1,3,5" (o "todos").
+function listaNumerada(telefono, sesion, ids, encabezado) {
+  sesion.paso = "multi_rubros";
+  sesion.datos.multiLista = ids;
+  const tiene = new Set(sesion.datos.rubros || []);
+  const lineas = ids.map((id, i) => (i + 1) + ". " + rubroPorId[id].titulo + (tiene.has(id) ? " ✅" : ""));
+  return textoA(telefono,
+    encabezado + "\n\n" + lineas.join("\n") +
+    "\n\nResponde con los *números separados por coma* (ej: 1,3,5) o escribe *todos*. Los ✅ ya los tienes.");
+}
+
+async function procesarMulti(telefono, sesion, texto) {
+  const lista = sesion.datos.multiLista || [];
+  const t = texto.toLowerCase();
+  let elegidos = [];
+  if (/\btodos?\b/.test(t)) elegidos = lista.slice();
+  else elegidos = [...new Set((t.match(/\d+/g) || []).map(n => parseInt(n, 10) - 1))]
+    .filter(i => i >= 0 && i < lista.length).map(i => lista[i]);
+  if (elegidos.length === 0) {
+    return textoA(telefono, "No encontré números válidos. Responde con los números de la lista separados por coma (ej: 1,3,5) o *todos*.");
+  }
+  sesion.datos.rubros = sesion.datos.rubros || [];
+  let agregados = 0, omitidos = 0;
+  for (const id of elegidos) {
+    if (sesion.datos.rubros.includes(id)) continue;
+    if (sesion.datos.rubros.length >= MAX_RUBROS) { omitidos++; continue; }
+    sesion.datos.rubros.push(id); agregados++;
+    sesion.datos.ultimoRubro = id;
+  }
+  sesion.paso = "elegir_mas_rubros";
+  return botonesA(telefono,
+    "✅ Agregados: " + agregados + (omitidos ? " (el máximo es " + MAX_RUBROS + ", " + omitidos + " no cupieron)" : "") +
+    "\n\nTus rubros:\n" + resumenRubros(sesion) + "\n\n¿Quieres sumar otro?",
+    [
+      { id: "mas_rubros", titulo: "Otra familia" },
+      { id: "ver_sugeridos", titulo: "Ver sugeridos" },
+      { id: "seguir_rubros", titulo: "Listo, seguir" },
+    ]);
+}
+
 // Sugerencia: rubros que suelen venderse junto al ultimo elegido y que la
 // persona aun no tiene. Son relaciones definidas a mano en el catalogo; la
 // siguiente fase las cruza con lo que realmente se publica en Mercado Publico.
 function sugeridosDe(sesion) {
-  const base = rubroPorId[sesion.datos.ultimoRubro];
-  if (!base) return [];
-  return base.complementarios.filter(id => rubroPorId[id] && !(sesion.datos.rubros || []).includes(id)).slice(0, 4);
+  // Se miran TODOS los rubros ya elegidos (no solo el ultimo): gana el que mas
+  // rubros del cliente recomiendan; el empate lo decide el orden de eleccion.
+  const tiene = new Set(sesion.datos.rubros || []);
+  const puntos = new Map();
+  (sesion.datos.rubros || []).forEach(rid => {
+    const base = rubroPorId[rid];
+    (base?.complementarios || []).forEach(id => {
+      if (rubroPorId[id] && !tiene.has(id)) puntos.set(id, (puntos.get(id) || 0) + 1);
+    });
+  });
+  return [...puntos.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]).slice(0, 8);
 }
 
 function palabrasDeRubros(sesion) {
@@ -1228,14 +1279,17 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
     return textoA(telefono, "¿Qué vendes o en qué rubro trabajas? Escríbelo con palabras separadas por coma (ej: aseo, ferretería, notebooks).");
   }
   if (id === "fam_volver" || id === "mas_rubros") return menuFamilias(telefono, sesion);
+  if (id && id.startsWith("multi_")) {
+    const f = CATALOGO.find(x => x.id === id.slice(6));
+    if (!f) return menuFamilias(telefono, sesion);
+    return listaNumerada(telefono, sesion, f.rubros.map(r => r.id), "*" + f.titulo + "* — marca todos los que vendes:");
+  }
   if (id && id.startsWith("fam_")) return menuRubros(telefono, sesion, id.slice(4));
   if (id && id.startsWith("rub_")) return agregarRubro(telefono, sesion, id.slice(4));
   if (id === "ver_sugeridos") {
     const sug = sugeridosDe(sesion);
     if (sug.length === 0) return menuFamilias(telefono, sesion);
-    const filas = sug.map(i => ({ id: "rub_" + i, titulo: rubroPorId[i].titulo }));
-    filas.push({ id: "mas_rubros", titulo: "Ver todos los rubros" });
-    return listaA(telefono, "💡 Quienes venden *" + rubroPorId[sesion.datos.ultimoRubro].titulo + "* suelen sumar estos rubros:", filas, "Sugeridos");
+    return listaNumerada(telefono, sesion, sug, "💡 Según lo que ya elegiste, quienes venden eso suelen sumar estos rubros:");
   }
   if (id === "seguir_rubros") {
     if (!(sesion.datos.rubros || []).length) return menuFamilias(telefono, sesion);

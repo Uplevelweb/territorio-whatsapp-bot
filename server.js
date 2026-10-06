@@ -212,6 +212,12 @@ function plantillaA(telefono, parametros) {
 // Botones: WhatsApp permite hasta 3 por mensaje. Para el menu de dudas, que
 // tiene mas de 3 opciones, se usa una lista en vez de botones (ver abajo).
 function botonesA(telefono, texto, botones) {
+  // Igual que en las listas: WhatsApp rechaza el mensaje ENTERO si un boton
+  // pasa los 20 caracteres, y max 3 botones.
+  botones.forEach(b => {
+    if (b.titulo.length > 20) console.error(`⚠️ Titulo de boton demasiado largo (${b.titulo.length}/20): "${b.titulo}" — el mensaje completo va a fallar.`);
+  });
+  if (botones.length > 3) console.error(`⚠️ Mas de 3 botones (${botones.length}): el mensaje va a fallar.`);
   return enviar({
     to: telefono,
     type: "interactive",
@@ -281,15 +287,22 @@ function listaA(telefono, texto, opciones, tituloSeccion = "Preguntas frecuentes
 // persona, y de ahi se reparte. Pedido de Serling: "este numero puede ser de
 // soporte, de Territorio o de servicios de Uplevel, hay que filtrar".
 function menuPrincipal(telefono) {
-  return listaA(telefono,
-    "Hola 👋 Te contacta el equipo de soporte de Uplevel. ¿En qué podemos ayudarte?",
+  // 05-10-2026: opciones alineadas con lo que ofrece territorio.uplevelweb.art
+  // (alertas en 3 planes + consultoria individual de 60 min). Antes era una
+  // LISTA que se abria aparte, con Web y SaaS como opciones principales -que la
+  // pagina de Territorio no ofrece- y sin la consultoria. Ahora son 3 botones
+  // visibles en el mismo chat; web / sistema / persona quedan en "Otra consulta".
+  return botonesA(telefono,
+    "Hola 👋 Soy Terri, del equipo de Uplevel. ¿En qué te puedo ayudar?\n\n" +
+    "🔔 *Alertas*: licitaciones y compras ágiles de Mercado Público que calzan con lo que vendes (Territorio, 14 días gratis)\n" +
+    "🎯 *Consultoría*: una sesión de 60 minutos uno a uno sobre tus ventas al Estado\n" +
+    "💬 *Otra consulta*: página web, sistema a medida o hablar con una persona\n\n" +
+    "Toca una opción 👇",
     [
-      { id: "menu_territorio", titulo: "Alertas Mercado Público" },
-      { id: "menu_web", titulo: "Diseño de página web" },
-      { id: "menu_saas", titulo: "Desarrollo de SaaS" },
-      { id: "menu_persona", titulo: "Hablar con una persona" },
-    ],
-    "¿Qué necesitas?");
+      { id: "menu_territorio", titulo: "🔔 Alertas" },
+      { id: "menu_consultoria", titulo: "🎯 Consultoría" },
+      { id: "menu_otra", titulo: "💬 Otra consulta" },
+    ]);
 }
 
 // El menu que antes era "menuPrincipal": el arbol completo de Territorio
@@ -309,6 +322,31 @@ function menuTerritorio(telefono, sesion) {
     ]);
 }
 
+const TXT_CONSULTORIA =
+  "🎯 *Consultoría individual de Mercado Público*\n\n" +
+  "Una sesión uno a uno de *60 minutos* con quien vende al Estado todos los días. Analizamos tus cierres, tu competencia, tus precios y tus márgenes, y determinamos juntos por qué no adjudicas y qué necesitas para mejorar.\n\n" +
+  "💰 *$24.999* por sesión _(precio de lanzamiento; después $49.999)_\n" +
+  "Sin cobros ocultos ni comisiones.";
+
+function menuConsultoria(telefono, sesion) {
+  sesion.paso = "inicio";
+  return botonesA(telefono, TXT_CONSULTORIA + "\n\n¿La reservamos? 👇", [
+    { id: "consultoria_reservar", titulo: "Reservar mi sesión" },
+    { id: "menu_inicio", titulo: "↩ Volver" },
+  ]);
+}
+
+function menuOtraConsulta(telefono, sesion) {
+  sesion.paso = "inicio";
+  return botonesA(telefono,
+    "Además de Territorio, en Uplevel hacemos páginas web y sistemas a medida. ¿Qué necesitas? 👇",
+    [
+      { id: "menu_web", titulo: "💻 Web o sistema" },
+      { id: "menu_persona", titulo: "🙋 Una persona" },
+      { id: "menu_inicio", titulo: "↩ Volver" },
+    ]);
+}
+
 // Detecta la intencion a partir del PRIMER mensaje, cuando ya trae la senal
 // -los botones de uplevelweb.art mandan un texto precargado distinto segun
 // de que tarjeta vienen (ver deploy-project/index.html y /servicios/)-. Si
@@ -319,6 +357,7 @@ function detectarOrigen(texto) {
   const t = texto.toLowerCase();
   if (t.includes("página web") || t.includes("pagina web") || t.includes("cotizador")) return "web";
   if (t.includes("saas") || t.includes("sistema a medida")) return "saas";
+  if (t.includes("consultor")) return "consultoria";
   if (t.includes("territorio") || t.includes("licitac") || t.includes("mercado público") || t.includes("mercado publico") || t.includes("alerta")) return "territorio";
   return null;
 }
@@ -621,7 +660,8 @@ por alguna de las seis vías de Mercado Público.
 PLANES:
 - Plan Alerta: $19.999/mes (precio de lanzamiento)
 - Plan Inteligencia: $49.999/mes (con análisis de Terri)
-- Plan Acompañado: $199.999/mes (te acompañamos en la gestión; incluye el email marketing)
+- Plan Acompañado: $199.999/mes (incluye 8 horas al mes de acompañamiento estratégico, revisión de ofertas, itinerario de visitas y email marketing a tu cartera)
+- Consultoría individual de Mercado Público: sesión de 60 minutos, $24.999 (precio de lanzamiento; después $49.999). Si la piden, ofrécela y derívala a una persona del equipo.
 Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.
 
 CÓMO DEBES CONVERSAR:
@@ -928,6 +968,7 @@ async function manejarTexto(telefono, sesion, texto) {
     if (origen === "territorio") return menuTerritorio(telefono, sesion);
     if (origen === "web") return iniciarUplevel(telefono, sesion, "Diseño de página web");
     if (origen === "saas") return iniciarUplevel(telefono, sesion, "Desarrollo de SaaS a medida");
+    if (origen === "consultoria") return menuConsultoria(telefono, sesion);
     sesion.paso = "inicio";
     return menuPrincipal(telefono);
   }
@@ -941,7 +982,8 @@ async function manejarTexto(telefono, sesion, texto) {
     if (origen === "territorio") return menuTerritorio(telefono, sesion);
     if (origen === "web") return iniciarUplevel(telefono, sesion, "Diseño de página web");
     if (origen === "saas") return iniciarUplevel(telefono, sesion, "Desarrollo de SaaS a medida");
-    return textoA(telefono, "Elige una opción de la lista de arriba 👆, o cuéntame con tus palabras qué necesitas.");
+    if (origen === "consultoria") return menuConsultoria(telefono, sesion);
+    return textoA(telefono, "Toca uno de los botones de arriba 👆, o cuéntame con tus palabras qué necesitas.");
   }
 
   // Conversacion ya derivada a una persona: la IA se queda callada -no
@@ -1307,15 +1349,20 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   }
 
   if (id === "tengo_dudas") {
-    return listaA(telefono,
-      "Territorio 🧭 es tu radar de Mercado Público: filtra licitaciones, compras ágiles y Convenio Marco, y te avisa por correo solo lo que calza con lo que vendes.\n\n¿Qué te gustaría ver primero?",
+    return botonesA(telefono,
+      "Territorio 🧭 es tu radar de Mercado Público: filtra licitaciones, compras ágiles y Convenio Marco, y te avisa por correo solo lo que calza con lo que vendes.\n\n¿Qué te gustaría ver primero? 👇",
       [
         { id: "ver_ejemplo", titulo: "Así se ve el correo" },
-        { id: "ver_resumen", titulo: "Resumen de Territorio" },
         { id: "duda_precio", titulo: "Precio" },
-        { id: "duda_turnos", titulo: "Cómo llegan las alertas" },
-        { id: "duda_convenio", titulo: "Convenio Marco" },
+        { id: "mas_info", titulo: "Más información" },
       ]);
+  }
+  if (id === "mas_info") {
+    return botonesA(telefono, "Claro. ¿Qué más quieres saber? 👇", [
+      { id: "ver_resumen", titulo: "Resumen en PDF" },
+      { id: "duda_turnos", titulo: "Cuándo llegan" },
+      { id: "duda_convenio", titulo: "Convenio Marco" },
+    ]);
   }
 
   if (id === "ver_resumen") {
@@ -1335,7 +1382,8 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
       "💰 *Planes de Territorio*\n\n" +
       "• *Plan Alerta* — $19.999/mes _(precio de lanzamiento)_\n" +
       "• *Plan Inteligencia* — $49.999/mes _(con análisis de Terri)_\n" +
-      "• *Plan Acompañado* — $199.999/mes _(te acompañamos en la gestión)_\n\n" +
+      "• *Plan Acompañado* — $199.999/mes _(incluye 8 horas al mes de acompañamiento estratégico)_\n\n" +
+      "🎯 *Consultoría individual* (60 min) — $24.999 por sesión\n\n" +
       "Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.");
     return menuTerritorio(telefono, sesion);
   }
@@ -1359,7 +1407,11 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
 
   // Opciones del menu de entrada (18-09-2026) -------------------------------
   if (id === "menu_territorio") return menuTerritorio(telefono, sesion);
-  if (id === "menu_web") return iniciarUplevel(telefono, sesion, "Diseño de página web");
+  if (id === "menu_consultoria") return menuConsultoria(telefono, sesion);
+  if (id === "consultoria_reservar") return iniciarUplevel(telefono, sesion, "Consultoría individual de Mercado Público ($24.999 CLP, sesión de 60 min)");
+  if (id === "menu_otra") return menuOtraConsulta(telefono, sesion);
+  if (id === "menu_inicio") { sesion.paso = "inicio"; return menuPrincipal(telefono); }
+  if (id === "menu_web") return iniciarUplevel(telefono, sesion, "Página web o sistema (SaaS) a medida");
   if (id === "menu_saas") return iniciarUplevel(telefono, sesion, "Desarrollo de SaaS a medida");
   if (id === "menu_persona") return iniciarUplevel(telefono, sesion, "Quiere hablar con una persona");
 

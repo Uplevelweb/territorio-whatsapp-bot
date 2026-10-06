@@ -211,6 +211,21 @@ function plantillaA(telefono, parametros) {
 
 // Botones: WhatsApp permite hasta 3 por mensaje. Para el menu de dudas, que
 // tiene mas de 3 opciones, se usa una lista en vez de botones (ver abajo).
+// FORMATO UNICO DE MENUS (05-10-2026): toda opcion se muestra numerada en el
+// propio chat. Si son 3 o menos, ademas van como botones (atajo); si son mas,
+// solo el texto numerado. En ambos casos se puede responder con el numero.
+// `menuPendiente` guarda, por telefono, los ids del ultimo menu mostrado.
+const menuPendiente = new Map();
+
+function textoNumerado(texto, opciones, pie) {
+  return texto + "\n\n" + opciones.map((o, i) => `${i + 1}. ${o.titulo}`).join("\n") + "\n\n" + pie;
+}
+
+function listaNumA(telefono, texto, opciones) {
+  menuPendiente.set(telefono, opciones.map(o => o.id));
+  return textoA(telefono, textoNumerado(texto, opciones, "👉 Responde con el *número* de tu opción."));
+}
+
 function botonesA(telefono, texto, botones) {
   // Igual que en las listas: WhatsApp rechaza el mensaje ENTERO si un boton
   // pasa los 20 caracteres, y max 3 botones.
@@ -218,12 +233,15 @@ function botonesA(telefono, texto, botones) {
     if (b.titulo.length > 20) console.error(`⚠️ Titulo de boton demasiado largo (${b.titulo.length}/20): "${b.titulo}" — el mensaje completo va a fallar.`);
   });
   if (botones.length > 3) console.error(`⚠️ Mas de 3 botones (${botones.length}): el mensaje va a fallar.`);
+  menuPendiente.set(telefono, botones.map(b => b.id));
+  const cuerpo = textoNumerado(texto, botones, "👉 Toca un botón o responde con el *número*.");
+  if (cuerpo.length > 1024) console.error(`⚠️ Cuerpo de botones demasiado largo (${cuerpo.length}/1024): el mensaje va a fallar.`);
   return enviar({
     to: telefono,
     type: "interactive",
     interactive: {
       type: "button",
-      body: { text: texto },
+      body: { text: cuerpo },
       action: {
         buttons: botones.map(b => ({
           type: "reply",
@@ -969,6 +987,20 @@ async function manejarTexto(telefono, sesion, texto) {
     return textoA(telefono, "Recibido 🙌 Le avisamos a Serling directo — en un momento te escribe por acá.");
   }
 
+  // Respuesta por numero a un menu (formato unico, ver textoNumerado).
+  const pend = menuPendiente.get(telefono);
+  if (pend) {
+    if (/^\d{1,2}$/.test(t)) {
+      const idx = Number(t) - 1;
+      if (idx >= 0 && idx < pend.length) {
+        menuPendiente.delete(telefono);
+        return manejarInteractivo(telefono, sesion, { button_reply: { id: pend[idx] } });
+      }
+      return textoA(telefono, `Responde con un número del 1 al ${pend.length} 🙂`);
+    }
+    menuPendiente.delete(telefono); // escribio otra cosa: se sigue en conversacion libre
+  }
+
   // "hola"/"menu" siempre reinician la conversacion, sea cual sea el paso en
   // que iba -es la salida de emergencia si alguien se pierde a mitad de un
   // llenado de datos o de una charla con la IA-.
@@ -1206,9 +1238,9 @@ function menuFamilias(telefono, sesion) {
   sesion.paso = "elegir_familia";
   const filas = CATALOGO.map(f => ({ id: "fam_" + f.id, titulo: f.titulo }));
   filas.push({ id: "fam_otro", titulo: "Otro (lo escribo)" });
-  return listaA(telefono,
-    "Elige la *familia* de lo que vendes. Puedes sumar varios rubros (hasta " + MAX_RUBROS + "), de una o de varias familias 👇",
-    filas, "Tu rubro");
+  return listaNumA(telefono,
+    "Elige la *familia* de lo que vendes. Puedes sumar varios rubros (hasta " + MAX_RUBROS + "), de una o de varias familias.",
+    filas);
 }
 
 function menuRubros(telefono, sesion, familiaId) {
@@ -1217,7 +1249,7 @@ function menuRubros(telefono, sesion, familiaId) {
   const filas = f.rubros.map(r => ({ id: "rub_" + r.id, titulo: r.titulo }));
   // WhatsApp admite 10 filas: hay familias con 9 rubros, asi que "Volver" va en los botones de despues.
   filas.push({ id: "multi_" + f.id, titulo: "✅ Elegir varios" });
-  return listaA(telefono, "*" + f.titulo + "* — ¿qué vendes exactamente? Toca uno, o *Elegir varios* para marcar todos los que vendas de una vez.", filas, f.titulo);
+  return listaNumA(telefono, "*" + f.titulo + "* — ¿qué vendes exactamente? Elige uno, o *Elegir varios* para marcar todos los que vendas de una vez.", filas);
 }
 
 function resumenRubros(sesion) {
@@ -1333,6 +1365,7 @@ function preguntarTelefonoContacto(telefono, sesion) {
 // --- Respuestas a botones y listas -------------------------------------------
 async function manejarInteractivo(telefono, sesion, interactivo) {
   const id = interactivo.button_reply?.id || interactivo.list_reply?.id;
+  menuPendiente.delete(telefono);
 
   // Rubros cerrados (ver arriba)
   if (id === "fam_otro") {

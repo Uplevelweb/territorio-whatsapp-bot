@@ -630,9 +630,21 @@ async function obtenerOCrearClienteFlow(email, nombre) {
 const MODELO_IA = "claude-haiku-4-5-20251001"; // el mas barato: alcanza para conversar y usar herramientas
 
 const MANUAL_TERRITORIO = `
-Eres el agente de WhatsApp de Territorio, el sistema de inteligencia y gestión
-comercial de Uplevel para empresas que le venden al Estado de Chile
-(licitaciones, compras ágiles, grandes compras y Convenio Marco).
+QUIÉN ERES: eres *Terri*, el Asistente Inteligente de Territorio -una IA,
+y si te preguntan lo dices con naturalidad-. Territorio es el sistema de
+inteligencia y gestión comercial de Uplevel para empresas que le venden al
+Estado de Chile (licitaciones, compras ágiles, grandes compras y Convenio
+Marco). Siempre te presentas y hablas como Terri; nunca como "el asistente
+de Territorio" a secas ni con otro nombre.
+
+TU ROL EN ESTE CHAT: la persona ya vio un saludo tuyo con botones (Alertas,
+Consultoría, Otra consulta) y eligió Alertas o te escribió directo. NO la
+vuelvas a saludar ni a presentarte en cada mensaje, y no le preguntes si
+"ya conoce Territorio": responde directo a lo que dijo o pregunta, y
+conduce la charla hacia probar gratis. Tus temas son Territorio (alertas,
+planes, prueba gratis) y la consultoría individual; para páginas web o
+sistemas a medida, o si la persona pide hablar con alguien, dile que toque
+*menu* o escriba "hola" y elija "Otra consulta".
 
 QUÉ VENDE TERRITORIO, EN CONCRETO:
 1. Monitoreo diario y automático de Mercado Público, filtrado según lo que
@@ -933,6 +945,13 @@ async function responderConIA(telefono, sesion, textoUsuario) {
 
 // --- El arbol de conversacion ------------------------------------------------
 // Cada rama corresponde a un nodo del diagrama del documento "Embudo Territorio".
+// Saludos que reinician la conversacion y muestran el menu de botones. Antes
+// solo valia "hola": "Buen dia" o "Buenas" caian directo en la IA, que
+// contestaba con su propia presentacion y sin botones (05-10-2026).
+function esSaludo(t) {
+  return /^(hola|holi|holaa+|ola|buenas|buen d[ií]a|buenos d[ií]as|buenas tardes|buenas noches|hey|hi|hello|saludos|inicio|empezar|comenzar)\b/.test(t);
+}
+
 async function manejarTexto(telefono, sesion, texto) {
   const t = texto.trim().toLowerCase();
 
@@ -962,7 +981,7 @@ async function manejarTexto(telefono, sesion, texto) {
   // el cruce y entra directo a la rama que corresponde. Si no, se muestra
   // el menu de entrada completo (ver menuPrincipal). `!sesion.paso` cubre
   // una conversacion recien creada cuyo primer mensaje no dice "hola".
-  if (!sesion.paso || t === "menu" || t.startsWith("hola")) {
+  if (!sesion.paso || t === "menu" || esSaludo(t)) {
     sesion.historial = [];
     const origen = detectarOrigen(texto);
     if (origen === "territorio") return menuTerritorio(telefono, sesion);

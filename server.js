@@ -1886,6 +1886,85 @@ app.post("/panel/analizar-proceso", async (req, res) => {
   }
 });
 
+// ========== Cambio de plan desde el panel (solo super admin) ==========
+// Editar el plan de alguien que YA tiene suscripcion en Flow: se cambia el plan
+// de ESA suscripcion (subscription/changePlan). No se crea otra suscripcion ni
+// se pide la tarjeta de nuevo: Flow cobra el plan nuevo segun su propio ciclo.
+//  - confirmar:false  -> solo previsualiza (subscription/previewChangePlan).
+//  - confirmar:true   -> ejecuta, y solo si FLOW_CAMBIO_PLAN_ACTIVO=1 en Render
+//                        (interruptor que activa Serling tras probar con un
+//                        suscriptor de prueba).
+// Sin suscripcion en Flow (prueba gratis / alta manual) solo se ajusta la BD.
+app.options("/admin/plan", (_req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+
+async function rpcPanel(nombre, args) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${nombre}`, {
+    method: "POST",
+    headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
+  return r.json().catch(() => null);
+}
+
+app.post("/admin/plan", async (req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  const { token, correo, plan, activo, confirmar } = req.body || {};
+  if (!token || !correo) return res.status(400).json({ ok: false, motivo: "Falta el token o el correo." });
+  const planNuevo = String(plan || "");
+  if (!["", "inicio", "plus", "premium"].includes(planNuevo)) {
+    return res.status(400).json({ ok: false, motivo: "Plan inválido." });
+  }
+  try {
+    const datos = await rpcPanel("panel_datos_flow", { p_token: token, p_correo: correo });
+    if (!datos?.ok) return res.status(403).json({ ok: false, motivo: datos?.motivo || "No autorizado." });
+
+    const idSub = datos.flow_subscription_id;
+    const cambiaPlan = (datos.plan || "") !== planNuevo;
+    const guardarBD = async () => {
+      const r = await rpcPanel("panel_actualizar_suscriptor", {
+        p_token: token, p_correo_objetivo: correo, p_plan: planNuevo, p_activo: activo !== false,
+      });
+      return r?.ok ? { ok: true } : { ok: false, motivo: r?.motivo || "No se pudo guardar." };
+    };
+
+    // Sin Flow, o el plan no cambia (solo activo): solo base de datos.
+    if (!idSub || !cambiaPlan) {
+      const r = await guardarBD();
+      return res.status(r.ok ? 200 : 400).json({ ...r, flow: false });
+    }
+    // Pasar a "Prueba gratis" con Flow vivo seria dejar un cobro huerfano.
+    if (!planNuevo) {
+      return res.status(400).json({ ok: false, flow: true,
+        motivo: "Tiene una suscripción en Flow: para quitarle el plan, desactívalo con el casillero Activo y cancela su suscripción en Flow." });
+    }
+
+    const params = { subscriptionId: idSub, newPlanId: FLOW_PLAN_ID[planNuevo] };
+    if (!confirmar) {
+      const prev = await llamarFlow("/subscription/previewChangePlan", params, "POST");
+      if (!prev) return res.status(502).json({ ok: false, flow: true, motivo: "Flow no respondió la previsualización." });
+      return res.json({ ok: true, flow: true, previsualizacion: true, detalle: prev,
+        ejecucionHabilitada: process.env.FLOW_CAMBIO_PLAN_ACTIVO === "1" });
+    }
+    if (process.env.FLOW_CAMBIO_PLAN_ACTIVO !== "1") {
+      return res.status(409).json({ ok: false, flow: true,
+        motivo: "El cambio de plan en Flow aún no está habilitado (falta activar FLOW_CAMBIO_PLAN_ACTIVO en Render)." });
+    }
+    const hecho = await llamarFlow("/subscription/changePlan", params, "POST");
+    if (!hecho) return res.status(502).json({ ok: false, flow: true, motivo: "Flow rechazó el cambio de plan. No se modificó nada." });
+    const r = await guardarBD();
+    if (hecho?.next_invoice_date) await guardarFlowSubscripcion(correo, idSub, hecho.next_invoice_date);
+    return res.status(r.ok ? 200 : 500).json({ ...r, flow: true });
+  } catch (e) {
+    console.error("Error en /admin/plan:", e);
+    res.status(500).json({ ok: false, motivo: "Error interno al cambiar el plan." });
+  }
+});
+
 // ========== Análisis profundo con el PDF de adjuntos (26-09-2026) ==========
 // Segundo paso, opcional, del modulo de arriba: el cliente ya reviso
 // `ficha.enlace_adjuntos`, resolvio el captcha el mismo y bajo el PDF real

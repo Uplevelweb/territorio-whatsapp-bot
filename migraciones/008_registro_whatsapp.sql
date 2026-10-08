@@ -33,3 +33,17 @@ begin
     from (select creado_en, telefono, tipo, estado, detalle from public.whatsapp_envios order by creado_en desc limit 200) e), '[]'::jsonb));
 end $$;
 grant execute on function public.panel_listar_envios_whatsapp(text) to anon, authenticated;
+
+-- Remitente de los correos de Territorio a clientes: alertas@territorio.uplevelweb.art (dominio verificado en Resend el 06-10-2026).
+do $$
+declare r record; d text;
+begin
+  for r in select p.oid from pg_proc p
+           where p.pronamespace = 'public'::regnamespace
+             and p.proname in ('enviar_confirmacion','pedir_acceso_panel','mailer_enviar_campana','mailer_enviar_catalogo')
+             and pg_get_functiondef(p.oid) like '%alertas@uplevelweb.art%'
+  loop
+    d := replace(pg_get_functiondef(r.oid), 'alertas@uplevelweb.art', 'alertas@territorio.uplevelweb.art');
+    execute d;
+  end loop;
+end $$;

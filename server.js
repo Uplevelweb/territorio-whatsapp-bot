@@ -162,17 +162,30 @@ async function sesionDe(telefono) {
 
 // --- Enviar mensajes -------------------------------------------------------
 async function enviar(cuerpo) {
-  const respuesta = await fetch(GRAPH_URL, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${META_WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ messaging_product: "whatsapp", ...cuerpo }),
-  });
-  if (!respuesta.ok) {
-    console.error("Error al enviar a WhatsApp:", await respuesta.text());
+  // Devuelve {ok, estado, detalle, id}: quien necesite saber si salio de verdad
+  // (las alertas por plantilla) lo usa; el resto sigue funcionando como antes.
+  let respuesta;
+  try {
+    respuesta = await fetch(GRAPH_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${META_WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ messaging_product: "whatsapp", ...cuerpo }),
+    });
+  } catch (error) {
+    console.error("No se pudo contactar a WhatsApp:", error);
+    return { ok: false, estado: 0, detalle: String(error && error.message || error), id: null };
   }
+  const texto = await respuesta.text();
+  if (!respuesta.ok) {
+    console.error("Error al enviar a WhatsApp:", texto);
+    return { ok: false, estado: respuesta.status, detalle: texto.slice(0, 400), id: null };
+  }
+  let id = null;
+  try { id = JSON.parse(texto).messages?.[0]?.id || null; } catch (_) {}
+  return { ok: true, estado: respuesta.status, detalle: "", id };
 }
 
 function textoA(telefono, texto) {
@@ -190,10 +203,20 @@ function textoA(telefono, texto) {
 // -eso no lo hace este codigo, lo hace Serling una vez, y Meta tarda de
 // minutos a un dia en aprobarla-. `parametros` son los {{1}}, {{2}}... del
 // cuerpo de la plantilla, en orden.
-function plantillaA(telefono, parametros) {
+// La plantilla aprobada en Meta (alerta_oportunidades_diaria) tiene SOLO dos
+// variables: {{1}} nombre y {{2}} cantidad. Meta rechaza el mensaje si se
+// manda otra cantidad, asi que se recorta/valida aca. Si algun dia se aprueba
+// una plantilla con mas variables, se sube WHATSAPP_TEMPLATE_PARAMS en Render.
+const PARAMS_PLANTILLA = Math.max(1, parseInt(process.env.WHATSAPP_TEMPLATE_PARAMS || "2", 10) || 2);
+
+async function plantillaA(telefono, parametros) {
   if (!WHATSAPP_TEMPLATE_ALERTA) {
     console.error("Falta WHATSAPP_TEMPLATE_ALERTA en el entorno: no se puede mandar la alerta.");
-    return Promise.resolve();
+    return { ok: false, estado: "sin_plantilla", detalle: "Falta WHATSAPP_TEMPLATE_ALERTA en Render", id: null };
+  }
+  const usados = parametros.slice(0, PARAMS_PLANTILLA).map(texto => String(texto ?? "").replace(/\s+/g, " ").trim().slice(0, 200) || "-");
+  if (usados.length < PARAMS_PLANTILLA) {
+    return { ok: false, estado: "error", detalle: `La plantilla necesita ${PARAMS_PLANTILLA} datos y llegaron ${usados.length}`, id: null };
   }
   return enviar({
     to: telefono,
@@ -203,7 +226,7 @@ function plantillaA(telefono, parametros) {
       language: { code: "es" },
       components: [{
         type: "body",
-        parameters: parametros.map(texto => ({ type: "text", text: texto })),
+        parameters: usados.map(texto => ({ type: "text", text: texto })),
       }],
     },
   });
@@ -1653,13 +1676,30 @@ app.post("/tareas/enviar-alerta-whatsapp", async (req, res) => {
   const { telefono, parametros } = req.body || {};
   if (!telefono || !Array.isArray(parametros)) return res.sendStatus(400);
   try {
-    await plantillaA(telefono, parametros);
-    res.sendStatus(200);
+    const r = await plantillaA(telefono, parametros);
+    const estado = r.ok ? "enviado" : (r.estado === "sin_plantilla" ? "sin_plantilla" : "error");
+    await registrarEnvioWhatsapp(telefono, "alerta_diaria", estado, r.detalle, r.id);
+    if (!r.ok) return res.status(502).json({ ok: false, estado, detalle: r.detalle });
+    res.status(200).json({ ok: true, id: r.id });
   } catch (error) {
     console.error(`Error mandando la alerta de WhatsApp a ${telefono}:`, error);
+    await registrarEnvioWhatsapp(telefono, "alerta_diaria", "error", String(error && error.message || error), null);
     res.sendStatus(500);
   }
 });
+
+// Deja constancia en Supabase (tabla whatsapp_envios) de cada intento, salga o no.
+async function registrarEnvioWhatsapp(telefono, tipo, estado, detalle, waId) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_registrar_envio_whatsapp`, {
+      method: "POST",
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_telefono: telefono, p_tipo: tipo, p_estado: estado, p_detalle: detalle || null, p_wa_mensaje: waId || null }),
+    });
+  } catch (error) {
+    console.error("No se pudo registrar el envio de WhatsApp en Supabase:", error);
+  }
+}
 
 // Revision diaria de morosidad: el reloj de Supabase (pg_cron) llama aca una
 // vez al dia. Se le pregunta a Flow, plan por plan, cuales cobros estan

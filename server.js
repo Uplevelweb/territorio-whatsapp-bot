@@ -1008,6 +1008,8 @@ async function manejarTexto(telefono, sesion, texto) {
       await textoA(telefono, `✅ ¡Listo${nombre ? ", " + nombre : ""}! Tu WhatsApp quedó confirmado. Aquí te llegará el aviso diario de oportunidades (plan Plus o Premium). Para dejar de recibirlo, quita el número desde tu panel.`);
     } else if (r?.motivo === "numero_en_uso") {
       await textoA(telefono, "Ese número ya está vinculado a otra cuenta de Territorio. Si es un error, escríbenos y lo resolvemos.");
+    } else if (r?.motivo === "numero_distinto") {
+      await textoA(telefono, `Ese código se pidió para otro número${r.esperado_termina ? " (termina en " + r.esperado_termina + ")" : ""}. Envíalo desde ese celular, o cambia el número en tu panel y genera un código nuevo.`);
     } else if (r?.motivo === "demasiados_intentos") {
       await textoA(telefono, "Demasiados intentos seguidos. Espera un rato y vuelve a probar.");
     } else {

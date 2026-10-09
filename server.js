@@ -209,6 +209,11 @@ function textoA(telefono, texto) {
 // una plantilla con mas variables, se sube WHATSAPP_TEMPLATE_PARAMS en Render.
 const PARAMS_PLANTILLA = Math.max(1, parseInt(process.env.WHATSAPP_TEMPLATE_PARAMS || "2", 10) || 2);
 
+// El codigo de idioma tiene que ser IDENTICO al de la plantilla en Meta: "Spanish (CHL)" es es_CL,
+// "Spanish" es es. La alerta se creo como Spanish (CHL); si no coincide, Meta responde que la
+// plantilla no existe en ese idioma. Se puede cambiar en Render con WHATSAPP_TEMPLATE_IDIOMA_ALERTA.
+const IDIOMA_PLANTILLA_ALERTA = process.env.WHATSAPP_TEMPLATE_IDIOMA_ALERTA || "es_CL";
+
 async function plantillaA(telefono, parametros) {
   if (!WHATSAPP_TEMPLATE_ALERTA) {
     console.error("Falta WHATSAPP_TEMPLATE_ALERTA en el entorno: no se puede mandar la alerta.");
@@ -223,7 +228,7 @@ async function plantillaA(telefono, parametros) {
     type: "template",
     template: {
       name: WHATSAPP_TEMPLATE_ALERTA,
-      language: { code: "es" },
+      language: { code: IDIOMA_PLANTILLA_ALERTA },
       components: [{
         type: "body",
         parameters: usados.map(texto => ({ type: "text", text: texto })),
@@ -1933,6 +1938,7 @@ app.post("/panel/analizar-proceso", async (req, res) => {
 // boton "Copiar codigo", que lleva el mismo codigo). La persona lo escribe luego en el panel
 // (panel_whatsapp_confirmar_codigo). El codigo dura 15 minutos y solo se guarda hasheado.
 const PLANTILLA_CODIGO = process.env.WHATSAPP_TEMPLATE_CODIGO || "codigo_whatsapp_terri";
+const IDIOMA_PLANTILLA_CODIGO = process.env.WHATSAPP_TEMPLATE_IDIOMA_CODIGO || "es";
 app.options("/panel/enviar-codigo-whatsapp", (_req, res) => {
   res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
   res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -1953,7 +1959,7 @@ app.post("/panel/enviar-codigo-whatsapp", async (req, res) => {
     }
     const r = await enviar({
       to: d.numero, type: "template",
-      template: { name: PLANTILLA_CODIGO, language: { code: "es" },
+      template: { name: PLANTILLA_CODIGO, language: { code: IDIOMA_PLANTILLA_CODIGO },
         components: [
           { type: "body", parameters: [{ type: "text", text: d.codigo }] },
           { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: d.codigo }] },

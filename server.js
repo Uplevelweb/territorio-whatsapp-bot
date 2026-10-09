@@ -2005,6 +2005,63 @@ app.post("/admin/plan", async (req, res) => {
   }
 });
 
+// ========== Eliminar suscriptor + cancelar su suscripcion en Flow ==========
+// El panel llama aqui (no borra directo) cuando el usuario tiene plan o Flow.
+// Orden: validar token+clave -> cancelar en Flow -> recien ahi borrar.
+// Si Flow falla no se borra nada, para no dejar un cobro huerfano.
+app.options("/admin/eliminar-suscriptor", (_req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+
+app.post("/admin/eliminar-suscriptor", async (req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  const { token, correo, clave } = req.body || {};
+  if (!token || !correo) return res.status(400).json({ ok: false, motivo: "Falta el token o el correo." });
+  try {
+    const prep = await rpcPanel("panel_preparar_borrado", { p_token: token, p_correo_objetivo: correo, p_clave: clave || "" });
+    if (!prep?.ok) return res.status(403).json({ ok: false, motivo: prep?.motivo || "No autorizado." });
+
+    const idSub = prep.flow_subscription_id;
+    let flowCancelado = false;
+    if (idSub) {
+      // at_period_end=0: se corta ahora, no al final del periodo.
+      const r = await llamarFlow("/subscription/cancel", { subscriptionId: idSub, at_period_end: 0 }, "POST");
+      if (!r) {
+        // Puede que ya estuviera cancelada: se confirma antes de seguir.
+        const est = await llamarFlow("/subscription/get", { subscriptionId: idSub }, "GET");
+        const yaCerrada = est && [0, 4].includes(Number(est.status));
+        if (!yaCerrada) {
+          return res.status(502).json({ ok: false, flow: true,
+            motivo: "Flow no confirmó la cancelación de la suscripción. No se eliminó nada; reintenta o cancélala en el panel de Flow." });
+        }
+      }
+      flowCancelado = true;
+    }
+    // Quita tambien el cliente (tarjeta registrada). Si falla no frena el borrado.
+    if (prep.flow_customer_id) {
+      const c = await llamarFlow("/customer/delete", { customerId: prep.flow_customer_id }, "POST");
+      if (!c) console.error("No se pudo borrar el cliente en Flow:", prep.flow_customer_id);
+    }
+
+    const borrado = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_borrar_suscriptor`, {
+      method: "POST",
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_correo: prep.correo }),
+    }).then(r => r.json()).catch(() => null);
+    if (!borrado?.ok) {
+      return res.status(500).json({ ok: false, flow: flowCancelado,
+        motivo: (flowCancelado ? "Se canceló en Flow pero " : "") + "no se pudo eliminar de la base: " + (borrado?.motivo || "error interno") });
+    }
+    res.json({ ok: true, flow: flowCancelado });
+  } catch (e) {
+    console.error("Error en /admin/eliminar-suscriptor:", e);
+    res.status(500).json({ ok: false, motivo: "Error interno al eliminar." });
+  }
+});
+
 // ========== Análisis profundo con el PDF de adjuntos (26-09-2026) ==========
 // Segundo paso, opcional, del modulo de arriba: el cliente ya reviso
 // `ficha.enlace_adjuntos`, resolvio el captcha el mismo y bajo el PDF real

@@ -1948,6 +1948,49 @@ app.post("/panel/analizar-proceso", async (req, res) => {
   }
 });
 
+// ========== Terri tambien escribe por WhatsApp al iniciar la configuracion del numero ==========
+// 09-10-2026, pedido de Serling: ademas del correo, Terri le escribe al numero que la persona
+// acaba de poner, pidiendole el codigo que ve en su panel y en su correo. El mensaje NO lleva el
+// codigo (asi el chat solo "abre la puerta"; el codigo viaja por panel y correo).
+// Fuera de la ventana de 24 h Meta exige una PLANTILLA aprobada (WHATSAPP_TEMPLATE_CONFIRMACION,
+// 1 variable: nombre). Sin esa variable se intenta texto libre, que solo llega si la persona ya
+// hablo con Terri en las ultimas 24 h; si no llega, el panel y el correo siguen funcionando igual.
+const PLANTILLA_CONFIRMACION = process.env.WHATSAPP_TEMPLATE_CONFIRMACION || "";
+app.options("/panel/avisar-whatsapp-codigo", (_req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+app.post("/panel/avisar-whatsapp-codigo", async (req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  const { token } = req.body || {};
+  if (!token) return res.status(400).json({ ok: false, motivo: "Falta el token." });
+  try {
+    const d = await rpcPanel("bot_aviso_codigo_whatsapp", { p_token: token });
+    if (!d?.ok) return res.json({ ok: false, enviado: false, motivo: d?.motivo || "no autorizado" });
+    const nombre = String(d.nombre || "").trim().split(/\s+/)[0] || "";
+    let r;
+    if (PLANTILLA_CONFIRMACION) {
+      r = await enviar({
+        to: d.numero, type: "template",
+        template: { name: PLANTILLA_CONFIRMACION, language: { code: "es" },
+          components: [{ type: "body", parameters: [{ type: "text", text: nombre || "hola" }] }] },
+      });
+    } else {
+      r = await textoA(d.numero,
+        `Hola${nombre ? " " + nombre : ""}, soy Terri de Territorio 👋\n\n` +
+        `Iniciaste la configuración de tu WhatsApp para recibir tus alertas.\n\n` +
+        `Para confirmarlo, responde a este mensaje con el código *TERRI-XXXXXX* que ves en tu panel (Configura tus alertas) y en el correo que te acabamos de enviar.\n\n` +
+        `Sin esta confirmación no podremos enviarte alertas por WhatsApp. Si no fuiste tú, ignora este mensaje.`);
+    }
+    res.json({ ok: true, enviado: !!r?.ok, via: PLANTILLA_CONFIRMACION ? "plantilla" : "texto" });
+  } catch (e) {
+    console.error("Error en /panel/avisar-whatsapp-codigo:", e);
+    res.json({ ok: false, enviado: false, motivo: "error" });
+  }
+});
+
 // ========== Cambio de plan desde el panel (solo super admin) ==========
 // Editar el plan de alguien que YA tiene suscripcion en Flow: se cambia el plan
 // de ESA suscripcion (subscription/changePlan). No se crea otra suscripcion ni

@@ -209,6 +209,11 @@ function textoA(telefono, texto) {
 // una plantilla con mas variables, se sube WHATSAPP_TEMPLATE_PARAMS en Render.
 const PARAMS_PLANTILLA = Math.max(1, parseInt(process.env.WHATSAPP_TEMPLATE_PARAMS || "2", 10) || 2);
 
+// El codigo de idioma tiene que ser IDENTICO al de la plantilla en Meta: "Spanish (CHL)" es es_CL,
+// "Spanish" es es. La alerta se creo como Spanish (CHL); si no coincide, Meta responde que la
+// plantilla no existe en ese idioma. Se puede cambiar en Render con WHATSAPP_TEMPLATE_IDIOMA_ALERTA.
+const IDIOMA_PLANTILLA_ALERTA = process.env.WHATSAPP_TEMPLATE_IDIOMA_ALERTA || "es_CL";
+
 async function plantillaA(telefono, parametros) {
   if (!WHATSAPP_TEMPLATE_ALERTA) {
     console.error("Falta WHATSAPP_TEMPLATE_ALERTA en el entorno: no se puede mandar la alerta.");
@@ -223,7 +228,7 @@ async function plantillaA(telefono, parametros) {
     type: "template",
     template: {
       name: WHATSAPP_TEMPLATE_ALERTA,
-      language: { code: "es" },
+      language: { code: IDIOMA_PLANTILLA_ALERTA },
       components: [{
         type: "body",
         parameters: usados.map(texto => ({ type: "text", text: texto })),
@@ -995,28 +1000,6 @@ function esSaludo(t) {
 
 async function manejarTexto(telefono, sesion, texto) {
   const t = texto.trim().toLowerCase();
-
-  // 08-10-2026: confirmacion del WhatsApp de alertas. El panel entrega un
-  // codigo TERRI-XXXXXX y la persona lo manda desde SU celular: que llegue
-  // desde este numero prueba que es suyo (y deja el opt-in). Va antes que
-  // todo lo demas para que no se cruce con la conversacion normal.
-  const cod = texto.match(/\bTERRI-[A-Z0-9]{6}\b/i);
-  if (cod) {
-    const r = await rpcPanel("bot_confirmar_whatsapp", { p_codigo: cod[0].toUpperCase(), p_telefono: telefono });
-    if (r?.ok) {
-      const nombre = (r.nombre || "").split(" ")[0];
-      await textoA(telefono, `✅ ¡Listo${nombre ? ", " + nombre : ""}! Tu WhatsApp quedó confirmado. Aquí te llegará el aviso diario de oportunidades (plan Plus o Premium). Para dejar de recibirlo, quita el número desde tu panel.`);
-    } else if (r?.motivo === "numero_en_uso") {
-      await textoA(telefono, "Ese número ya está vinculado a otra cuenta de Territorio. Si es un error, escríbenos y lo resolvemos.");
-    } else if (r?.motivo === "numero_distinto") {
-      await textoA(telefono, `Ese código se pidió para otro número${r.esperado_termina ? " (termina en " + r.esperado_termina + ")" : ""}. Envíalo desde ese celular, o cambia el número en tu panel y genera un código nuevo.`);
-    } else if (r?.motivo === "demasiados_intentos") {
-      await textoA(telefono, "Demasiados intentos seguidos. Espera un rato y vuelve a probar.");
-    } else {
-      await textoA(telefono, "No pude validar ese código: puede haber vencido (dura 30 minutos). Genera uno nuevo desde tu panel y envíamelo de nuevo.");
-    }
-    return;
-  }
 
   // 19-09-2026: pedido de Serling -"necesito soporte" tiene que caer
   // SIEMPRE directo a su WhatsApp personal, sin depender del criterio de
@@ -1948,45 +1931,43 @@ app.post("/panel/analizar-proceso", async (req, res) => {
   }
 });
 
-// ========== Terri tambien escribe por WhatsApp al iniciar la configuracion del numero ==========
-// 09-10-2026, pedido de Serling: ademas del correo, Terri le escribe al numero que la persona
-// acaba de poner, pidiendole el codigo que ve en su panel y en su correo. El mensaje NO lleva el
-// codigo (asi el chat solo "abre la puerta"; el codigo viaja por panel y correo).
-// Fuera de la ventana de 24 h Meta exige una PLANTILLA aprobada (WHATSAPP_TEMPLATE_CONFIRMACION,
-// 1 variable: nombre). Sin esa variable se intenta texto libre, que solo llega si la persona ya
-// hablo con Terri en las ultimas 24 h; si no llega, el panel y el correo siguen funcionando igual.
-const PLANTILLA_CONFIRMACION = process.env.WHATSAPP_TEMPLATE_CONFIRMACION || "";
-app.options("/panel/avisar-whatsapp-codigo", (_req, res) => {
+// ========== Codigo de confirmacion del WhatsApp: llega POR WhatsApp ==========
+// 09-10-2026, pedido de Serling (y recomendacion de Meta): la persona escribe su celular en el
+// panel, Terri le manda un correo (sin codigo) y este endpoint le envia el codigo por WhatsApp con
+// la plantilla de AUTENTICACION aprobada (WHATSAPP_TEMPLATE_CODIGO, 1 variable: el codigo, mas el
+// boton "Copiar codigo", que lleva el mismo codigo). La persona lo escribe luego en el panel
+// (panel_whatsapp_confirmar_codigo). El codigo dura 15 minutos y solo se guarda hasheado.
+const PLANTILLA_CODIGO = process.env.WHATSAPP_TEMPLATE_CODIGO || "codigo_whatsapp_terri";
+const IDIOMA_PLANTILLA_CODIGO = process.env.WHATSAPP_TEMPLATE_IDIOMA_CODIGO || "es";
+app.options("/panel/enviar-codigo-whatsapp", (_req, res) => {
   res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
   res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
   res.sendStatus(204);
 });
-app.post("/panel/avisar-whatsapp-codigo", async (req, res) => {
+app.post("/panel/enviar-codigo-whatsapp", async (req, res) => {
   res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
   const { token } = req.body || {};
   if (!token) return res.status(400).json({ ok: false, motivo: "Falta el token." });
   try {
-    const d = await rpcPanel("bot_aviso_codigo_whatsapp", { p_token: token });
-    if (!d?.ok) return res.json({ ok: false, enviado: false, motivo: d?.motivo || "no autorizado" });
-    const nombre = String(d.nombre || "").trim().split(/\s+/)[0] || "";
-    let r;
-    if (PLANTILLA_CONFIRMACION) {
-      r = await enviar({
-        to: d.numero, type: "template",
-        template: { name: PLANTILLA_CONFIRMACION, language: { code: "es" },
-          components: [{ type: "body", parameters: [{ type: "text", text: nombre || "hola" }] }] },
-      });
-    } else {
-      r = await textoA(d.numero,
-        `Hola${nombre ? " " + nombre : ""}, soy Terri de Territorio 👋\n\n` +
-        `Iniciaste la configuración de tu WhatsApp para recibir tus alertas.\n\n` +
-        `Para confirmarlo, responde a este mensaje con el código *TERRI-XXXXXX* que ves en tu panel (Configura tus alertas) y en el correo que te acabamos de enviar.\n\n` +
-        `Sin esta confirmación no podremos enviarte alertas por WhatsApp. Si no fuiste tú, ignora este mensaje.`);
+    const d = await rpcPanel("bot_generar_codigo_whatsapp", { p_token: token });
+    if (!d?.ok) {
+      const motivo = d?.motivo === "demasiados_avisos" ? "Demasiados códigos pedidos. Espera un rato."
+                   : d?.motivo === "sin_numero" ? "Primero escribe tu número."
+                   : (d?.motivo || "no autorizado");
+      return res.json({ ok: false, enviado: false, motivo });
     }
-    res.json({ ok: true, enviado: !!r?.ok, via: PLANTILLA_CONFIRMACION ? "plantilla" : "texto" });
+    const r = await enviar({
+      to: d.numero, type: "template",
+      template: { name: PLANTILLA_CODIGO, language: { code: IDIOMA_PLANTILLA_CODIGO },
+        components: [
+          { type: "body", parameters: [{ type: "text", text: d.codigo }] },
+          { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: d.codigo }] },
+        ] },
+    });
+    res.json({ ok: true, enviado: !!r?.ok, motivo: r?.ok ? "" : "No pudimos enviar el WhatsApp. Revisa el número y vuelve a intentar." });
   } catch (e) {
-    console.error("Error en /panel/avisar-whatsapp-codigo:", e);
+    console.error("Error en /panel/enviar-codigo-whatsapp:", e);
     res.json({ ok: false, enviado: false, motivo: "error" });
   }
 });

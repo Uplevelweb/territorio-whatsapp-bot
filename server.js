@@ -1544,6 +1544,14 @@ app.post("/webhook", async (req, res) => {
 
   try {
     const cambio = req.body.entry?.[0]?.changes?.[0]?.value;
+    // Estado de entrega de lo que ENVIAMOS (la plantilla del codigo, la alerta, etc.): si Meta lo
+    // acepto pero luego no se entrego (pago pendiente, numero sin WhatsApp...), queda en el log.
+    const est = cambio?.statuses?.[0];
+    if (est) {
+      if (est.status === "failed") console.error(`❌ WhatsApp NO entregó a ${est.recipient_id}:`, JSON.stringify(est.errors || est).slice(0, 500));
+      else console.log(`📬 WhatsApp ${est.status} → ${est.recipient_id}`);
+      return;
+    }
     const mensaje = cambio?.messages?.[0];
     if (!mensaje) return; // puede ser un aviso de "mensaje leido", no un mensaje nuevo
 

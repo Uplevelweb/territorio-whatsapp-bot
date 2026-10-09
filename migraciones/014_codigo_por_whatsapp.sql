@@ -37,28 +37,79 @@ begin
     if v_llave is not null and v_mail is not null then
       v_visible := '+' || left(v_num, 2) || ' ' || substr(v_num, 3, 1) || ' ' || substr(v_num, 4, 4) || ' ' || substr(v_num, 8);
       v_cuerpo := format($html$
-<table width="100%%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fa;padding:26px 14px;">
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<style>
+  body,table,td{-webkit-text-size-adjust:100%%;-ms-text-size-adjust:100%%}
+  @media only screen and (max-width:480px){
+    .pad{padding-left:16px !important;padding-right:16px !important}
+    .titulo{font-size:21px !important}
+  }
+</style>
+</head>
+<body bgcolor="#f4f6fa" style="margin:0;padding:0;background:#f4f6fa;">
+<table width="100%%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6fa"
+       style="background:#f4f6fa;padding:26px 10px;">
  <tr><td align="center">
-  <table width="900" cellpadding="0" cellspacing="0" border="0" style="max-width:900px;background:#ffffff;border-radius:12px;">
-   <tr><td style="background:#ffffff;border-radius:12px 12px 0 0;padding:18px 22px 0;">
-     <div style="color:#0c2c57;font-size:18px;font-weight:700;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">Territorio &middot; Sistema Inteligente de Alertas</div>
+  <table width="100%%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff"
+         style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;">
+   <tr><td class="pad" bgcolor="#ffffff" style="background:#ffffff;padding:18px 24px 12px;">
+     <table cellpadding="0" cellspacing="0" border="0"><tr>
+       <td style="padding-right:10px;"><img src="https://territorio.uplevelweb.art/img/logo.png"
+           width="34" height="34" alt="Uplevel"
+           style="display:block;border-radius:12px;padding:7px;background:#ffffff;box-sizing:border-box;"></td>
+       <td style="color:#0c2c57;font-size:16.5px;font-weight:700;font-family:
+                  -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+           Territorio</td>
+     </tr></table>
    </td></tr>
-   <tr><td style="height:3px;background:#f18c3f;font-size:0;line-height:0;">&nbsp;</td></tr>
-   <tr><td style="padding:24px 22px 26px;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#1a2b3d;font-size:16.5px;line-height:1.55;">
-     <div style="font-size:20px;font-weight:700;color:#0c2c57;">Iniciaste la configuraci&oacute;n de tu WhatsApp</div>
-     <div style="padding-top:12px;">Hola%s: soy Terri. Desde tu panel pediste vincular el n&uacute;mero <strong>%s</strong> para recibir tu aviso diario por WhatsApp.</div>
-     <div style="padding-top:14px;">Te acabo de enviar <strong>un c&oacute;digo de verificaci&oacute;n por WhatsApp</strong> a ese n&uacute;mero. Para confirmarlo:</div>
-     <div style="padding-top:10px;">
-       <div style="padding:4px 0;"><strong>1.</strong> Abre el mensaje de WhatsApp y copia el c&oacute;digo.</div>
-       <div style="padding:4px 0;"><strong>2.</strong> Vuelve a tu panel, en <strong>Configura tus alertas (Email y WhatsApp)</strong>, y p&eacute;galo en el campo de c&oacute;digo.</div>
+   <tr><td height="3" bgcolor="#f18c3f" style="height:3px;background:#f18c3f;font-size:0;line-height:0;">&nbsp;</td></tr>
+   <tr><td class="pad" bgcolor="#ffffff" style="background:#ffffff;padding:22px 24px 26px;font-family:-apple-system,
+                  BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+                  color:#1a2b3d;font-size:16px;line-height:1.55;">
+     <div class="titulo" style="font-size:19px;font-weight:700;color:#0c2c57;">
+       Iniciaste la configuraci&oacute;n de tu WhatsApp</div>
+     <div style="padding-top:10px;color:#1a2b3d;">
+       Hola%s. Pediste vincular el n&uacute;mero <b>%s</b> para recibir tu aviso diario por WhatsApp.
+       Te enviamos un <b>c&oacute;digo de verificaci&oacute;n</b> a ese WhatsApp.
      </div>
-     <div style="padding-top:14px;"><strong>El c&oacute;digo dura 15 minutos.</strong> Si vence, genera uno nuevo desde tu panel. Mientras no lo confirmes, no te enviaremos alertas por WhatsApp; tu aviso por correo sigue igual.</div>
-     <div style="padding-top:18px;font-size:13.5px;color:#6b7c8f;">Si no fuiste t&uacute;, ignora este correo: sin ese c&oacute;digo no se vincula nada. Por seguridad, este correo no incluye el c&oacute;digo.</div>
+     <div style="padding-top:12px;color:#1a2b3d;">
+       <b>1.</b> Abre el mensaje de WhatsApp y copia el c&oacute;digo.<br>
+       <b>2.</b> Vuelve a tu panel, en <b>Configura tus alertas (Email y WhatsApp)</b>, y p&eacute;galo en el campo de c&oacute;digo.
+     </div>
+     <div style="padding-top:22px;">
+       <a href="https://territorio.uplevelweb.art/panel/" style="display:inline-block;background:#f18c3f;
+          color:#0c2c57;text-decoration:none;font-size:16px;font-weight:700;
+          padding:14px 30px;border-radius:999px;">Ir a mi panel</a>
+     </div>
+     <div style="padding-top:22px;border-top:1px solid #e8ecf1;margin-top:6px;"></div>
+     <div style="padding-top:16px;font-size:13.5px;color:#6b7c8f;">
+       <b>El c&oacute;digo dura 15 minutos.</b> Si vence, pide uno nuevo desde tu panel. Mientras no lo confirmes,
+       no enviaremos alertas por WhatsApp; tu aviso por correo sigue igual.
+     </div>
+     <div style="padding-top:14px;font-size:13.5px;color:#6b7c8f;">
+       Si no fuiste t&uacute;, ignora este correo y no pasa nada. Por seguridad, este correo no incluye el c&oacute;digo.
+     </div>
+     <div style="padding-top:14px;font-size:13.5px;color:#6b7c8f;">
+       <b>No respondas este correo</b>, nadie lo lee. &iquest;Necesitas ayuda?
+       <a href="https://wa.me/56967329214?text=Necesito%%20soporte" style="color:#0c2c57;font-weight:600;">Escr&iacute;benos por WhatsApp</a>.
+     </div>
    </td></tr>
   </table>
+  <div style="max-width:600px;text-align:center;color:#8d9aa8;font-size:12.5px;
+              padding-top:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+    Uplevel &middot; Territorio
+  </div>
  </td></tr>
-</table>$html$,
-        case when coalesce(trim(v_nombre),'') = '' then '' else ' ' || split_part(trim(v_nombre), ' ', 1) end,
+</table>
+</body>
+</html>$html$,
+        case when coalesce(trim(v_nombre),'') = '' then '' else ', ' || split_part(trim(v_nombre), ' ', 1) end,
         v_visible);
       perform http_post(
         url := 'https://api.resend.com/emails',

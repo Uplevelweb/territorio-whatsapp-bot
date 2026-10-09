@@ -996,6 +996,26 @@ function esSaludo(t) {
 async function manejarTexto(telefono, sesion, texto) {
   const t = texto.trim().toLowerCase();
 
+  // 08-10-2026: confirmacion del WhatsApp de alertas. El panel entrega un
+  // codigo TERRI-XXXXXX y la persona lo manda desde SU celular: que llegue
+  // desde este numero prueba que es suyo (y deja el opt-in). Va antes que
+  // todo lo demas para que no se cruce con la conversacion normal.
+  const cod = texto.match(/\bTERRI-[A-Z0-9]{6}\b/i);
+  if (cod) {
+    const r = await rpcPanel("bot_confirmar_whatsapp", { p_codigo: cod[0].toUpperCase(), p_telefono: telefono });
+    if (r?.ok) {
+      const nombre = (r.nombre || "").split(" ")[0];
+      await textoA(telefono, `✅ ¡Listo${nombre ? ", " + nombre : ""}! Tu WhatsApp quedó confirmado. Aquí te llegará el aviso diario de oportunidades (plan Plus o Premium). Para dejar de recibirlo, quita el número desde tu panel.`);
+    } else if (r?.motivo === "numero_en_uso") {
+      await textoA(telefono, "Ese número ya está vinculado a otra cuenta de Territorio. Si es un error, escríbenos y lo resolvemos.");
+    } else if (r?.motivo === "demasiados_intentos") {
+      await textoA(telefono, "Demasiados intentos seguidos. Espera un rato y vuelve a probar.");
+    } else {
+      await textoA(telefono, "No pude validar ese código: puede haber vencido (dura 30 minutos). Genera uno nuevo desde tu panel y envíamelo de nuevo.");
+    }
+    return;
+  }
+
   // 19-09-2026: pedido de Serling -"necesito soporte" tiene que caer
   // SIEMPRE directo a su WhatsApp personal, sin depender del criterio de
   // la IA ni de en que paso iba la conversacion-. Va primero que cualquier

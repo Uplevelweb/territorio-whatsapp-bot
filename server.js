@@ -1991,8 +1991,8 @@ app.post("/panel/enviar-codigo-whatsapp", async (req, res) => {
 // ========== Aviso "tu WhatsApp quedo configurado" ==========
 // 09-10-2026, pedido de Serling: al confirmar el numero hay que avisar por WhatsApp Y por correo
 // (el correo lo manda la base al confirmar). Un mensaje del negocio fuera de la ventana de 24 h
-// exige PLANTILLA aprobada por Meta (categoria Utilidad), con 2 variables: {{1}} nombre y {{2}} fecha
-// desde la que se puede cambiar el numero. Si WHATSAPP_TEMPLATE_CONFIRMADO no esta en Render, no se
+// exige PLANTILLA aprobada por Meta (categoria Utilidad), con 1 variable: {{1}} nombre. El numero
+// queda FIJO una vez confirmado (solo soporte/super admin lo cambia). Si WHATSAPP_TEMPLATE_CONFIRMADO no esta en Render, no se
 // manda nada por WhatsApp (el correo sale igual): falla abierto. Se avisa UNA sola vez por confirmacion.
 const PLANTILLA_CONFIRMADO = process.env.WHATSAPP_TEMPLATE_CONFIRMADO || "";
 const IDIOMA_PLANTILLA_CONFIRMADO = process.env.WHATSAPP_TEMPLATE_IDIOMA_CONFIRMADO || "es";
@@ -2016,7 +2016,6 @@ app.post("/panel/avisar-whatsapp-configurado", async (req, res) => {
       template: { name: PLANTILLA_CONFIRMADO, language: { code: IDIOMA_PLANTILLA_CONFIRMADO },
         components: [{ type: "body", parameters: [
           { type: "text", text: primerNombre || "hola" },
-          { type: "text", text: d.hasta },
         ] }] },
     });
     await registrarEnvioWhatsapp(d.numero, "configurado", r?.ok ? "enviado" : "error", r?.ok ? "aceptado por Meta" : (r?.detalle || "sin detalle"), r?.id);

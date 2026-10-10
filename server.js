@@ -1550,6 +1550,13 @@ app.post("/webhook", async (req, res) => {
     if (est) {
       if (est.status === "failed") console.error(`❌ WhatsApp NO entregó a ${est.recipient_id}:`, JSON.stringify(est.errors || est).slice(0, 500));
       else console.log(`📬 WhatsApp ${est.status} → ${est.recipient_id}`);
+      // 09-10-2026: queda tambien en whatsapp_envios (visible en el panel del super admin). Antes el
+      // "no llego el codigo" solo se podia ver en el log de Render, que se pierde al redesplegar.
+      if (est.status === "failed" || est.status === "delivered") {
+        await registrarEnvioWhatsapp(est.recipient_id, "estado_entrega",
+          est.status === "failed" ? "error" : "enviado",
+          est.status === "failed" ? JSON.stringify(est.errors || est) : "entregado al celular", est.id);
+      }
       return;
     }
     const mensaje = cambio?.messages?.[0];
@@ -1973,9 +1980,49 @@ app.post("/panel/enviar-codigo-whatsapp", async (req, res) => {
           { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: d.codigo }] },
         ] },
     });
+    await registrarEnvioWhatsapp(d.numero, "codigo", r?.ok ? "enviado" : "error", r?.ok ? "aceptado por Meta" : (r?.detalle || "sin detalle"), r?.id);
     res.json({ ok: true, enviado: !!r?.ok, motivo: r?.ok ? "" : "No pudimos enviar el WhatsApp. Revisa el número y vuelve a intentar." });
   } catch (e) {
     console.error("Error en /panel/enviar-codigo-whatsapp:", e);
+    res.json({ ok: false, enviado: false, motivo: "error" });
+  }
+});
+
+// ========== Aviso "tu WhatsApp quedo configurado" ==========
+// 09-10-2026, pedido de Serling: al confirmar el numero hay que avisar por WhatsApp Y por correo
+// (el correo lo manda la base al confirmar). Un mensaje del negocio fuera de la ventana de 24 h
+// exige PLANTILLA aprobada por Meta (categoria Utilidad), con 2 variables: {{1}} nombre y {{2}} fecha
+// desde la que se puede cambiar el numero. Si WHATSAPP_TEMPLATE_CONFIRMADO no esta en Render, no se
+// manda nada por WhatsApp (el correo sale igual): falla abierto. Se avisa UNA sola vez por confirmacion.
+const PLANTILLA_CONFIRMADO = process.env.WHATSAPP_TEMPLATE_CONFIRMADO || "";
+const IDIOMA_PLANTILLA_CONFIRMADO = process.env.WHATSAPP_TEMPLATE_IDIOMA_CONFIRMADO || "es";
+app.options("/panel/avisar-whatsapp-configurado", (_req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+app.post("/panel/avisar-whatsapp-configurado", async (req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  const { token } = req.body || {};
+  if (!token) return res.status(400).json({ ok: false, motivo: "Falta el token." });
+  try {
+    if (!PLANTILLA_CONFIRMADO) return res.json({ ok: true, enviado: false, motivo: "sin_plantilla" });
+    const d = await rpcPanel("bot_confirmacion_whatsapp", { p_token: token });
+    if (!d?.ok) return res.json({ ok: true, enviado: false, motivo: d?.motivo || "no_corresponde" });
+    const primerNombre = String(d.nombre || "").trim().split(/\s+/)[0] || "";
+    const r = await enviar({
+      to: d.numero, type: "template",
+      template: { name: PLANTILLA_CONFIRMADO, language: { code: IDIOMA_PLANTILLA_CONFIRMADO },
+        components: [{ type: "body", parameters: [
+          { type: "text", text: primerNombre || "hola" },
+          { type: "text", text: d.hasta },
+        ] }] },
+    });
+    await registrarEnvioWhatsapp(d.numero, "configurado", r?.ok ? "enviado" : "error", r?.ok ? "aceptado por Meta" : (r?.detalle || "sin detalle"), r?.id);
+    res.json({ ok: true, enviado: !!r?.ok });
+  } catch (e) {
+    console.error("Error en /panel/avisar-whatsapp-configurado:", e);
     res.json({ ok: false, enviado: false, motivo: "error" });
   }
 });

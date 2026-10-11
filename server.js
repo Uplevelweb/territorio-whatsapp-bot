@@ -2026,6 +2026,42 @@ app.post("/panel/avisar-whatsapp-configurado", async (req, res) => {
   }
 });
 
+// ========== Reenviar la confirmacion de WhatsApp (solo super admin, 11-10-2026) ==========
+// Pedido de Serling: poder mandar la confirmacion (correo + WhatsApp) las veces que haga falta desde
+// Super Admin, por ejemplo cuando asigno el numero a mano y no salio nada. Es MANUAL: ni eliminar un
+// suscriptor ni quitar un numero mandan nada; solo altas, confirmaciones y este reenvio.
+// La base valida que el token sea de super admin, manda el correo y devuelve numero y nombre.
+app.options("/admin/reenviar-confirmacion-whatsapp", (_req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+app.post("/admin/reenviar-confirmacion-whatsapp", async (req, res) => {
+  res.header("Access-Control-Allow-Origin", ORIGEN_PANEL);
+  const { token, correo } = req.body || {};
+  if (!token || !correo) return res.status(400).json({ ok: false, motivo: "Falta el token o el correo." });
+  try {
+    const d = await rpcPanel("bot_admin_reenviar_confirmacion_whatsapp", { p_token: token, p_correo: correo });
+    if (!d?.ok) return res.status(d?.motivo === "no autorizado" ? 403 : 200).json({ ok: false, motivo: d?.motivo || "No se pudo reenviar." });
+    let whatsapp = "sin_plantilla";
+    if (PLANTILLA_CONFIRMADO) {
+      const primerNombre = String(d.nombre || "").trim().split(/\s+/)[0] || "";
+      const r = await enviar({
+        to: d.numero, type: "template",
+        template: { name: PLANTILLA_CONFIRMADO, language: { code: IDIOMA_PLANTILLA_CONFIRMADO },
+          components: [{ type: "body", parameters: [{ type: "text", text: primerNombre || "hola" }] }] },
+      });
+      await registrarEnvioWhatsapp(d.numero, "configurado", r?.ok ? "enviado" : "error", r?.ok ? "reenvio super admin" : (r?.detalle || "sin detalle"), r?.id);
+      whatsapp = r?.ok ? "enviado" : "error";
+    }
+    res.json({ ok: true, correo: !!d.correo_enviado, whatsapp });
+  } catch (e) {
+    console.error("Error en /admin/reenviar-confirmacion-whatsapp:", e);
+    res.status(500).json({ ok: false, motivo: "Error interno al reenviar." });
+  }
+});
+
 // ========== Cambio de plan desde el panel (solo super admin) ==========
 // Editar el plan de alguien que YA tiene suscripcion en Flow: se cambia el plan
 // de ESA suscripcion (subscription/changePlan). No se crea otra suscripcion ni

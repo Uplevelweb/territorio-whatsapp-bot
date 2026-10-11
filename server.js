@@ -2031,9 +2031,9 @@ async function armarFichaYBases(codigo) {
   // con lo que si se pudo conseguir, nunca se cae entero por esto.
   const anioReclamos = new Date().getFullYear();
   const [reclamosDelAnio, basesInfo, enlaceAdjuntos] = await Promise.all([
-    contarReclamosDelAnio(ficha.organismo).catch(() => null),
-    tipo === "Licitación" ? leerBasesLicitacion(codigo).catch(() => ({ bases: null })) : Promise.resolve({ bases: null }),
-    obtenerLinkAdjuntos(codigo, tipo).catch(() => null),
+    contarReclamosDelAnio(ficha.organismo).catch(e => { console.error("[analizar] reclamos no disponibles:", e.message || e); return null; }),
+    tipo === "Licitación" ? leerBasesLicitacion(codigo).catch(e => { console.error("[analizar] bases no disponibles (¿Chromium instalado en Render?):", e.message || e); return { bases: null }; }) : Promise.resolve({ bases: null }),
+    obtenerLinkAdjuntos(codigo, tipo).catch(e => { console.error("[analizar] link de adjuntos no disponible:", e.message || e); return null; }),
   ]);
   ficha.reclamos_anio_fiscal = reclamosDelAnio;
   ficha.anio_reclamos = anioReclamos;

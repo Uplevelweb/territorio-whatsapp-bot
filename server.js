@@ -1817,7 +1817,57 @@ function formatoFecha(iso) {
   return iso ? String(iso).slice(0, 16).replace("T", " ") : null;
 }
 
-async function analizarProceso(codigo) {
+// 11-10-2026, pedido de Serling (probado con la licitacion 2239-2-LR26): el analisis salia corto y no
+// decia los RECAUDOS (documentos que exigen las bases), ni POR QUE enfatizar cada cosa, ni profundizaba
+// en la preparacion; y no destacaba que quien aun no vende en el rubro pero SI ha vendido en Convenio
+// Marco puede ser muy viable por como se puntua. Ahora son dos pasos:
+//   1) ANALISIS OBJETIVO (ficha + bases): es igual para todos los clientes, por eso se GUARDA en
+//      Supabase (analisis_procesos) y lo reusa quien consulte el mismo proceso en los 10 dias siguientes.
+//   2) «PARA TI»: cruza ese analisis con lo que el cliente declaro en su panel (rubros, RUT de proveedor).
+//      Es personal, no se guarda.
+const MODELO_ANALISIS = process.env.MODELO_ANALISIS || MODELO_IA;
+const { extraerJson, normalizarAnalisis, normalizarParaTi, textoPlano, perfilDeFiltros } = require("./analisis_proceso_util");
+
+async function analizarProceso(codigo, perfil) {
+  // Guardado de otros clientes (hasta 10 dias). Si Supabase no responde se analiza igual: falla abierto.
+  let guardado = null;
+  try {
+    const g = await rpcPanel("bot_analisis_leer", { p_codigo: codigo });
+    if (g && g.ficha && g.analisis) guardado = g;
+  } catch (_e) { /* sin cache: se sigue */ }
+
+  let ficha, analisis, tipo, desdeCache = false, diasGuardado = 0;
+  if (guardado) {
+    ficha = guardado.ficha; analisis = guardado.analisis; tipo = guardado.tipo || ficha.tipo;
+    desdeCache = true;
+    diasGuardado = Math.max(0, Math.floor((Date.now() - new Date(guardado.creado_en).getTime()) / 86400000));
+    // El link de adjuntos NO se guarda (es de sesion): se pide de nuevo, sin gastar IA.
+    ficha.enlace_adjuntos = await obtenerLinkAdjuntos(codigo, tipo).catch(() => null);
+  } else {
+    const r = await armarFichaYBases(codigo);
+    if (!r.ok) return r;
+    ficha = r.ficha; tipo = r.tipo;
+    const bruto = await pedirAnalisisObjetivoIA(ficha, r.bases);
+    analisis = normalizarAnalisis(extraerJson(bruto)) || (bruto ? normalizarAnalisis({ resumen: bruto }) : null);
+    // Una licitacion cuyas bases no se pudieron leer queda con un analisis pobre: no se guarda, para que
+    // la proxima consulta lo intente de nuevo en vez de repartir el pobre a todos por 10 dias.
+    const completo = analisis && (tipo !== "Licitación" || r.bases);
+    if (completo) {
+      const { enlace_adjuntos, ...fichaGuardable } = ficha;
+      rpcPanel("bot_analisis_guardar", { p_codigo: codigo, p_tipo: tipo, p_ficha: fichaGuardable, p_analisis: analisis })
+        .catch(e => console.error("No se pudo guardar el analisis:", e && e.message));
+    }
+  }
+
+  const paraTi = analisis ? await pedirParaTiIA(ficha, analisis, perfil).catch(() => null) : null;
+  return {
+    ok: true, ficha, analisis, para_ti: paraTi, desde_cache: desdeCache, dias_guardado: diasGuardado,
+    sugerencia: textoPlano(analisis, paraTi), // el panel viejo solo sabe pintar esto
+  };
+}
+
+// Pide a Mercado Publico la ficha y, si es licitacion, el texto de las bases.
+async function armarFichaYBases(codigo) {
   // Se prueba primero como licitacion y, si no aparece, como compra agil/OC
   // -un mismo numero de proceso no repite entre las dos APIs-.
   let detalle = await pedirDetalleMP("licitaciones", codigo);
@@ -1851,13 +1901,9 @@ async function analizarProceso(codigo) {
     items,
   };
 
-  // 26-09-2026, pedido de Serling: profundizar el analisis con cuantos
-  // reclamos tiene el organismo (solo del año fiscal en curso) y, cuando es
-  // licitacion, el contenido real de las bases -no solo la ficha basica de
-  // arriba-. Las dos cosas se piden en paralelo porque son independientes;
-  // si cualquiera falla (el sitio de MP no respondio, esta caido, etc.) el
-  // analisis sigue igual con lo que si se pudo conseguir, nunca se cae
-  // entero por esto.
+  // 26-09-2026, pedido de Serling: reclamos del organismo (solo del año fiscal en curso) y, cuando es
+  // licitacion, el contenido real de las bases. Se piden en paralelo; si algo falla el analisis sigue
+  // con lo que si se pudo conseguir, nunca se cae entero por esto.
   const anioReclamos = new Date().getFullYear();
   const [reclamosDelAnio, basesInfo, enlaceAdjuntos] = await Promise.all([
     contarReclamosDelAnio(ficha.organismo).catch(() => null),
@@ -1866,38 +1912,89 @@ async function analizarProceso(codigo) {
   ]);
   ficha.reclamos_anio_fiscal = reclamosDelAnio;
   ficha.anio_reclamos = anioReclamos;
-  // 26-09-2026, pedido de Serling: los adjuntos reales (formularios, bases
-  // tecnicas en PDF, a veces un .zip) exigen resolver un captcha en el sitio
-  // de Mercado Publico -no se pueden bajar solos sin arriesgar que le
-  // bloqueen la IP al bot-. Se le entrega al cliente el link ya armado del
-  // visor para que el mismo haga ese clic y baje el archivo; si despues lo
-  // sube de vuelta en /panel/analizar-adjunto, la IA profundiza el analisis
-  // con el contenido real de ese documento.
+  // Los adjuntos reales exigen un captcha en el sitio de Mercado Publico: se le entrega al cliente el
+  // link ya armado para que lo resuelva el mismo (ver /panel/analizar-adjunto).
   ficha.enlace_adjuntos = enlaceAdjuntos;
-
-  const sugerencia = await pedirSugerenciaIA(ficha, basesInfo && basesInfo.bases);
-  return { ok: true, ficha, sugerencia };
+  return { ok: true, ficha, tipo, bases: basesInfo && basesInfo.bases };
 }
 
-async function pedirSugerenciaIA(ficha, basesTexto) {
-  const prompt = `Eres un asesor comercial de Mercado Publico en Chile. Con estos datos reales de una oportunidad, escribe en español un analisis breve con estas partes, cada una bien diferenciada: (1) un resumen de 2-3 lineas de que se trata, (2) una sugerencia de propuesta concreta -que enfatizar, que preparar, si aplica- para tener mejores chances de ganarla, (3) una recomendacion directa de si conviene postular o no y por que. Como parte del analisis de riesgo del negocio, comenta cuantos reclamos registra el organismo comprador durante ${ficha.anio_reclamos} (dato: ${ficha.reclamos_anio_fiscal === null || ficha.reclamos_anio_fiscal === undefined ? "no se pudo obtener" : ficha.reclamos_anio_fiscal + " reclamos"}) -si el numero es alto coméntalo como una señal de alerta razonable (por ejemplo, atrasos en el pago), sin exagerar ni asustar, y si no se pudo obtener simplemente no lo menciones-. Si hay visita a terreno obligatoria, dile que sin asistir queda descalificado sin importar la oferta. No inventes datos que no esten aca; si algo no viene, dilo con naturalidad.
-
-Datos de la ficha:
-${JSON.stringify(ficha, null, 2)}
-${basesTexto ? `\nContenido real de las bases de la licitacion (usalo para hablar de los criterios de evaluacion con su ponderacion, garantias exigidas, plazos de pago y cualquier requisito relevante que aparezca):\n${basesTexto}` : ""}`;
+async function llamarClaudeJson(prompt, maxTokens) {
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
-      body: JSON.stringify({ model: MODELO_IA, max_tokens: 600, messages: [{ role: "user", content: prompt }] }),
+      body: JSON.stringify({ model: MODELO_ANALISIS, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
+      signal: AbortSignal.timeout(120000),
     });
-    if (!r.ok) { console.error("Error IA analizar-proceso:", await r.text()); return null; }
+    if (!r.ok) { console.error("Error IA analizar-proceso:", r.status, await r.text()); return null; }
     const datos = await r.json();
     return datos?.content?.[0]?.text || null;
   } catch (e) {
     console.error("Error IA analizar-proceso:", e);
     return null;
   }
+}
+
+function hoyEnChile() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Santiago" });
+}
+
+function pedirAnalisisObjetivoIA(ficha, basesTexto) {
+  const reclamos = ficha.reclamos_anio_fiscal === null || ficha.reclamos_anio_fiscal === undefined
+    ? "no se pudo obtener" : `${ficha.reclamos_anio_fiscal} reclamos`;
+  const prompt = `Eres Terri, asesora comercial experta en Mercado Público de Chile. Analiza esta oportunidad EN DETALLE para alguien que va a decidir si postula y cómo preparar su propuesta. Habla en español, claro y directo. Usa SOLO los datos que te entrego: si algo no viene, dilo con naturalidad en vez de inventarlo.
+
+Fecha de hoy: ${hoyEnChile()}.
+
+Responde ÚNICAMENTE con un JSON válido (sin texto antes ni después, sin bloques de código), con exactamente estas claves:
+{
+  "resumen": "2-3 líneas: qué se compra, quién compra, monto o alcance si se sabe y plazos clave",
+  "enfasis": [ {"punto": "qué destacar en la propuesta", "porque": "POR QUÉ: ligado al criterio de evaluación y su ponderación, o a una exigencia de las bases"} ],
+  "preparacion": [ "paso concreto de preparación, en orden, con fechas o plazos cuando existan" ],
+  "recaudos": [ {"documento": "nombre del documento, anexo, declaración, certificado o respuesta en plataforma", "detalle": "qué debe contener, quién lo firma y cómo o dónde se entrega", "tipo": "administrativo | técnico | económico | garantía | para contratar", "obligatorio": true} ],
+  "criterios": [ {"criterio": "nombre", "peso": "20%", "como_sumar": "qué hacer para sacar buen puntaje en ese criterio"} ],
+  "garantias_pagos": "garantías exigidas (monto, vigencia, cuándo se entregan) y plazo y forma de pago; vacío si no hay datos",
+  "alertas": [ "causales de inadmisibilidad o descalificación, visita a terreno obligatoria, plazos por vencer, reclamos del organismo" ],
+  "recomendacion": { "veredicto": "Conviene postular | Postula con cautela | No conviene", "porque": "2-4 líneas con la razón concreta" }
+}
+
+Reglas:
+- "enfasis": entre 3 y 5 puntos y SIEMPRE con su porqué; empieza por los criterios de mayor ponderación.
+- "preparacion": entre 4 y 7 pasos en orden cronológico, con la clave de cada uno (qué se rechaza si falta, qué suma puntaje).
+- "recaudos": lista TODO lo que las bases exigen para ofertar (documentos administrativos, técnicos y económicos, anexos, declaraciones juradas, respuestas en la plataforma) y para contratar (certificados, vigencias, garantías). Un ítem por documento, con el detalle exacto. Si no tienes el texto de las bases, deja la lista vacía y dilo en "alertas".
+- "criterios": todos los de la tabla de evaluación, con su ponderación exacta. Explica "como_sumar" de forma práctica.
+- Si hay visita a terreno obligatoria, indícalo en "alertas": sin asistir queda descalificado sin importar la oferta.
+- Reclamos del organismo comprador en ${ficha.anio_reclamos}: ${reclamos}. Si el número es alto, coméntalo como una señal razonable de atención (por ejemplo atrasos de pago) sin exagerar; si no se pudo obtener, no lo menciones.
+- Si el proceso ya está cerrado según las fechas, dilo en "alertas".
+- No menciones precios ni cifras que no estén en los datos.
+
+Datos de la ficha:
+${JSON.stringify({ ...ficha, enlace_adjuntos: undefined }, null, 2)}
+${basesTexto ? `\nContenido real de las bases (secciones de la ficha de Mercado Público):\n${basesTexto}` : "\n(No se pudo leer el texto de las bases para este proceso.)"}`;
+  return llamarClaudeJson(prompt, 4000);
+}
+
+async function pedirParaTiIA(ficha, analisis, perfil) {
+  const prompt = `Eres Terri, asesora comercial experta en Mercado Público de Chile. Ya hay un análisis de una oportunidad. Escribe ahora la parte PERSONAL para este proveedor, cruzando el análisis con lo que él declaró en su panel. Habla en español, de tú, claro y positivo pero honesto.
+
+Perfil del proveedor (solo lo que él declaró en su panel):
+${JSON.stringify(perfil || { palabras_clave: [], rut_proveedor_registrado: false })}
+
+Oportunidad: ${ficha.nombre} (${ficha.tipo}, ${ficha.organismo}).
+Ítems: ${(ficha.items || []).join(", ") || "no informados"}
+Criterios de evaluación: ${JSON.stringify(analisis.criterios)}
+Alertas: ${JSON.stringify(analisis.alertas)}
+Recomendación general: ${JSON.stringify(analisis.recomendacion)}
+
+Responde ÚNICAMENTE con un JSON válido (sin texto antes ni después, sin bloques de código): {"veredicto": "Muy viable | Viable | Viable con trabajo | Poco viable | Falta información", "texto": "4 a 7 líneas"}
+
+Reglas:
+- Mira si las palabras clave del proveedor calzan con lo que se compra. Dilo claramente: si calzan, es una ventaja; si NO calzan, dilo también.
+- IMPORTANTE: si el proveedor tiene RUT de proveedor registrado (es decir, vende en Convenio Marco / Mercado Público) y los criterios de evaluación ponderan experiencia, transacciones, cantidad de órdenes de compra o antigüedad en Mercado Público, destaca que AUNQUE todavía no venda en este rubro, su historial vendiendo en Convenio Marco juega a su favor en esos criterios, y suma el porcentaje de puntaje que esos criterios representan. En ese caso la postulación es muy viable si no hay un requisito excluyente que no pueda cumplir (visita obligatoria, garantías, certificaciones).
+- Si no tiene RUT de proveedor registrado, no asumas historial: dile que si registra su RUT en «Mis alertas» podrás medir su experiencia real.
+- No inventes cifras de sus ventas ni de su historial: no las conoces.
+- Termina con UNA acción concreta para hoy.`;
+  return llamarClaudeJson(prompt, 900).then(b => normalizarParaTi(extraerJson(b)));
 }
 
 // Verifica sesion + plan llamando a la MISMA funcion que ya usa el panel
@@ -1938,7 +2035,13 @@ app.post("/panel/analizar-proceso", async (req, res) => {
   }
 
   try {
-    const resultado = await analizarProceso(String(codigo).trim());
+    // Lo que el cliente declaro en su panel (rubros, RUT de proveedor) para la parte «Para ti».
+    let perfil = { palabras_clave: [], rut_proveedor_registrado: false };
+    try {
+      const f = await rpcPanel("panel_mis_filtros", { p_token: token });
+      if (Array.isArray(f) && f[0]) perfil = perfilDeFiltros(f[0]);
+    } catch (_e) { /* sin perfil: el analisis sale igual */ }
+    const resultado = await analizarProceso(String(codigo).trim().toUpperCase(), perfil);
     res.json(resultado);
   } catch (e) {
     console.error("Error en /panel/analizar-proceso:", e);

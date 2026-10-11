@@ -100,6 +100,45 @@ async function contarReclamosDelAnio(nombreOrganismo) {
 // el mismo contenido, ya en texto. Tambien trae, de regalo, "Reclamos
 // recibidos ... ultimos 12 meses", que se guarda aparte solo como referencia
 // -el numero que de verdad se le pide a la IA es el del año fiscal (arriba)-.
+const CABEZAS_BASES = [
+  "1. Características de la licitación",
+  "2. Organismo demandante",
+  "3. Etapas y plazos",
+  "4. Antecedentes para incluir en la oferta",
+  "5. Requisitos para contratar al proveedor adjudicado",
+  "6. Criterios de evaluación",
+  "7. Montos y duración del contrato",
+  "8. Garantías requeridas",
+  "9. Requerimientos técnicos y otras cláusulas",
+];
+// [cabecera, tope de caracteres ya sin espacio sobrante]. La 2 (organismo) no se manda: ya viene en la ficha.
+const SECCIONES_BASES = [
+  ["1. Características de la licitación", 900],
+  ["3. Etapas y plazos", 1300],
+  ["4. Antecedentes para incluir en la oferta", 7000],
+  ["5. Requisitos para contratar al proveedor adjudicado", 3500],
+  ["6. Criterios de evaluación", 2000],
+  ["7. Montos y duración del contrato", 2000],
+  ["8. Garantías requeridas", 1800],
+  ["9. Requerimientos técnicos y otras cláusulas", 3000],
+];
+
+// Los titulos aparecen DOS veces en la pagina (el indice de arriba y la seccion de verdad):
+// se usa siempre la ultima aparicion. Medido el 11-10-2026 sobre 2239-2-LR26: 17.000 caracteres utiles.
+function armarBasesPorSecciones(texto) {
+  const posiciones = CABEZAS_BASES.map(c => texto.lastIndexOf(c));
+  const partes = [];
+  for (const [cabecera, tope] of SECCIONES_BASES) {
+    const inicio = texto.lastIndexOf(cabecera);
+    if (inicio < 0) continue;
+    const siguiente = posiciones.filter(p => p > inicio).sort((a, b) => a - b)[0];
+    const cuerpo = texto.slice(inicio, siguiente === undefined ? texto.length : siguiente)
+      .replace(/\bSubir\b/g, " ").replace(/\s+/g, " ").trim();
+    partes.push(cuerpo.slice(0, tope));
+  }
+  return partes.length ? partes.join("\n\n") : null;
+}
+
 async function leerBasesLicitacion(codigo) {
   const navegador = await obtenerNavegador();
   const pagina = await navegador.newPage();
@@ -111,13 +150,15 @@ async function leerBasesLicitacion(codigo) {
     const texto = await pagina.textContent("body");
     if (!texto) return { bases: null, reclamos_12_meses_texto: null };
 
-    const inicio = texto.indexOf("1. Características de la licitación");
-    // Recorte generoso (unos 6000 caracteres) para no pasarle a la IA un
-    // texto gigante -las 10 secciones completas de una licitacion grande
-    // pueden ser muy largas- pero sin cortar antes de llegar a "Criterios de
-    // evaluacion" y "Garantias requeridas", que son las secciones que mas
-    // importan para decidir si conviene postular.
-    const bases = inicio >= 0 ? texto.slice(inicio, inicio + 6000) : null;
+    // 11-10-2026: ANTES se cortaban los primeros 6000 caracteres desde la seccion 1. Con el
+    // espacio en blanco que trae la pagina eso terminaba dentro de la seccion 3 y NUNCA llegaba a
+    // «4. Antecedentes para incluir en la oferta» (los recaudos: documentos administrativos,
+    // tecnicos y economicos), ni a los criterios ni a las garantias -lo que Serling echo de menos
+    // con la licitacion 2239-2-LR26-. Ahora cada seccion se lee POR SEPARADO, se le quita el
+    // espacio sobrante y se le pone un tope propio: asi las secciones que deciden una postulacion
+    // (4 a 8) siempre entran, y la 9, que en una licitacion grande tiene 200.000 caracteres,
+    // aporta solo el comienzo.
+    const bases = armarBasesPorSecciones(texto);
 
     const matchReclamos = texto.match(/Reclamos recibidos[^\n]*:\s*(\d+)/i);
     const reclamos_12_meses_texto = matchReclamos ? matchReclamos[0].trim() : null;
@@ -195,4 +236,4 @@ async function obtenerLinkAdjuntos(codigo, tipo) {
   }
 }
 
-module.exports = { contarReclamosDelAnio, leerBasesLicitacion, obtenerLinkAdjuntos };
+module.exports = { contarReclamosDelAnio, leerBasesLicitacion, obtenerLinkAdjuntos, armarBasesPorSecciones };

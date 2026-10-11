@@ -159,6 +159,12 @@ async function leerBasesLicitacion(codigo) {
     // (4 a 8) siempre entran, y la 9, que en una licitacion grande tiene 200.000 caracteres,
     // aporta solo el comienzo.
     const bases = armarBasesPorSecciones(texto);
+    if (!bases) {
+      // Diagnostico (11-10-2026): si Mercado Publico respondio otra cosa que la ficha (bloqueo, captcha, pagina de
+      // error), queda en el log que vio el navegador, sin tener que adivinar.
+      const titulo = await pagina.title().catch(() => "");
+      console.error(`[analisis_profundo] La ficha ${codigo} no trajo secciones de bases. URL final: ${pagina.url()} | titulo: "${titulo}" | largo: ${texto.length} | inicio: ${texto.replace(/\s+/g, " ").trim().slice(0, 300)}`);
+    }
 
     const matchReclamos = texto.match(/Reclamos recibidos[^\n]*:\s*(\d+)/i);
     const reclamos_12_meses_texto = matchReclamos ? matchReclamos[0].trim() : null;

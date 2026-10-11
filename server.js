@@ -237,6 +237,25 @@ async function plantillaA(telefono, parametros) {
   });
 }
 
+// 11-10-2026: RESUMEN DIARIO con botones (aprobado por Serling). La plantilla nueva lleva 4 datos:
+// {{1}} nombre, {{2}} total (licitaciones + compras agiles), {{3}} desglose, {{4}} linea de Convenio Marco,
+// y dos botones: «Ver las mejores» (respuesta rapida, payload ver_mejores) y «Abrir mi panel» (URL).
+// Si WHATSAPP_TEMPLATE_ALERTA_RESUMEN no esta puesta, se sigue usando la plantilla vieja de 2 datos.
+const PLANTILLA_RESUMEN = process.env.WHATSAPP_TEMPLATE_ALERTA_RESUMEN || "";
+async function plantillaResumenA(telefono, parametros) {
+  const usados = parametros.slice(0, 4).map(t => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, 200) || "-");
+  if (usados.length < 4) return { ok: false, estado: "error", detalle: "El resumen necesita 4 datos", id: null };
+  return enviar({
+    to: telefono,
+    type: "template",
+    template: {
+      name: PLANTILLA_RESUMEN,
+      language: { code: IDIOMA_PLANTILLA_ALERTA },
+      components: [{ type: "body", parameters: usados.map(texto => ({ type: "text", text: texto })) }],
+    },
+  });
+}
+
 // Botones: WhatsApp permite hasta 3 por mensaje. Para el menu de dudas, que
 // tiene mas de 3 opciones, se usa una lista en vez de botones (ver abajo).
 // FORMATO UNICO DE MENUS (05-10-2026): toda opcion se muestra numerada en el
@@ -1512,6 +1531,17 @@ function preguntarTelefonoContacto(telefono, sesion) {
 }
 
 // --- Respuestas a botones y listas -------------------------------------------
+// «Ver las mejores»: las 3 mejores oportunidades del resumen de hoy. Texto libre: el cliente acaba de
+// escribir (tocar el boton abre la ventana de 24 h), asi que no hace falta otra plantilla.
+async function mostrarMejoresDeHoy(telefono, sesion) {
+  const mejores = (sesion.alerta && sesion.alerta.mejores) || [];
+  if (!mejores.length) {
+    return textoA(telefono, "No tengo el detalle de hoy a mano 🙈. Ábrelo completo en tu panel: https://territorio.uplevelweb.art/panel/");
+  }
+  const lineas = mejores.map((m, i) => `${i + 1}. *${m.titulo}*\n${[m.tipo, m.comprador, m.cierre ? "cierra " + m.cierre : ""].filter(Boolean).join(" · ")}${m.enlace ? "\n" + m.enlace : ""}`);
+  return textoA(telefono, `🏆 Las mejores de hoy:\n\n${lineas.join("\n\n")}\n\nEl resto, con su análisis, en tu panel: https://territorio.uplevelweb.art/panel/`);
+}
+
 async function manejarInteractivo(telefono, sesion, interactivo) {
   const id = interactivo.button_reply?.id || interactivo.list_reply?.id;
   menuPendiente.delete(telefono);
@@ -1695,6 +1725,11 @@ app.post("/webhook", async (req, res) => {
       await manejarTexto(telefono, sesion, mensaje.text.body);
     } else if (mensaje.type === "interactive") {
       await manejarInteractivo(telefono, sesion, mensaje.interactive);
+    } else if (mensaje.type === "button") {
+      // Boton de respuesta rapida de una PLANTILLA (llega como "button", no como "interactive").
+      const clave = String(mensaje.button?.payload || mensaje.button?.text || "").toLowerCase();
+      if (/ver_mejores|ver las mejores/.test(clave)) await mostrarMejoresDeHoy(telefono, sesion);
+      else await repetirUltimo(telefono, sesion, "Por ahora solo entiendo texto y los botones 🙂");
     } else {
       await repetirUltimo(telefono, sesion, "Por ahora solo entiendo texto y los botones 🙂");
     }
@@ -1818,10 +1853,17 @@ app.get("/pagar", async (req, res) => {
 // en dos lenguajes distintos.
 app.post("/tareas/enviar-alerta-whatsapp", async (req, res) => {
   if (!claveTareaOk(req)) return res.sendStatus(403);
-  const { telefono, parametros } = req.body || {};
+  const { telefono, parametros, mejores } = req.body || {};
   if (!telefono || !Array.isArray(parametros)) return res.sendStatus(400);
   try {
-    const r = await plantillaA(telefono, parametros);
+    const conResumen = PLANTILLA_RESUMEN && parametros.length >= 4;
+    const r = conResumen ? await plantillaResumenA(telefono, parametros) : await plantillaA(telefono, parametros);
+    if (r.ok && conResumen && Array.isArray(mejores)) {
+      // Lo que se responde al tocar «Ver las mejores»: queda en la sesion del cliente.
+      const ses = await sesionDe(telefono);
+      ses.alerta = { fecha: new Date().toISOString(), mejores: mejores.slice(0, 3) };
+      await guardarConversacion(telefono, ses);
+    }
     const estado = r.ok ? "enviado" : (r.estado === "sin_plantilla" ? "sin_plantilla" : "error");
     await registrarEnvioWhatsapp(telefono, "alerta_diaria", estado, r.detalle, r.id);
     if (!r.ok) return res.status(502).json({ ok: false, estado, detalle: r.detalle });

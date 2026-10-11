@@ -1920,7 +1920,7 @@ app.get("/tareas/sincronizar-flow", async (req, res) => {
 // asincrono por diseno (encola la llamada y la respuesta llega despues a
 // una tabla aparte), no sirve para "pedir y devolver ya" en una sola
 // consulta del panel.
-const { contarReclamosDelAnio, leerBasesLicitacion, obtenerLinkAdjuntos } = require("./analisis_profundo");
+const { leerBasesLicitacion } = require("./analisis_profundo");
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
 // El PDF que sube el cliente (ver mas abajo) nunca se guarda en disco: se
@@ -1966,8 +1966,6 @@ async function analizarProceso(codigo, perfil) {
     ficha = guardado.ficha; analisis = guardado.analisis; tipo = guardado.tipo || ficha.tipo;
     desdeCache = true;
     diasGuardado = Math.max(0, Math.floor((Date.now() - new Date(guardado.creado_en).getTime()) / 86400000));
-    // El link de adjuntos NO se guarda (es de sesion): se pide de nuevo, sin gastar IA.
-    ficha.enlace_adjuntos = await obtenerLinkAdjuntos(codigo, tipo).catch(() => null);
   } else {
     const r = await armarFichaYBases(codigo);
     if (!r.ok) return r;
@@ -1985,6 +1983,12 @@ async function analizarProceso(codigo, perfil) {
     }
   }
 
+  ficha.enlace_adjuntos = tipo === "Licitación"
+    ? `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(codigo)}` : null;
+  ficha.enlace_reclamos = "https://www.mercadopublico.cl/portal/modules/site/reclamos/busquedareclamos.aspx";
+  if (analisis) {
+    analisis = { ...analisis, alertas: [...(analisis.alertas || []), `Verifica los reclamos recientes de ${ficha.organismo || "el organismo"} en el buscador de reclamos de Mercado Público (${ficha.enlace_reclamos}): atrasos de pago o reclamos repetidos son una señal de atención.`] };
+  }
   const paraTi = analisis ? await pedirParaTiIA(ficha, analisis, perfil).catch(() => null) : null;
   return {
     ok: true, ficha, analisis, para_ti: paraTi, desde_cache: desdeCache, dias_guardado: diasGuardado,
@@ -2027,20 +2031,12 @@ async function armarFichaYBases(codigo) {
     items,
   };
 
-  // 26-09-2026, pedido de Serling: reclamos del organismo (solo del año fiscal en curso) y, cuando es
-  // licitacion, el contenido real de las bases. Se piden en paralelo; si algo falla el analisis sigue
-  // con lo que si se pudo conseguir, nunca se cae entero por esto.
-  const anioReclamos = new Date().getFullYear();
-  const [reclamosDelAnio, basesInfo, enlaceAdjuntos] = await Promise.all([
-    contarReclamosDelAnio(ficha.organismo).catch(e => { console.error("[analizar] reclamos no disponibles:", e.message || e); return null; }),
-    tipo === "Licitación" ? leerBasesLicitacion(codigo).catch(e => { console.error("[analizar] bases no disponibles (¿Chromium instalado en Render?):", e.message || e); return { bases: null }; }) : Promise.resolve({ bases: null }),
-    obtenerLinkAdjuntos(codigo, tipo).catch(e => { console.error("[analizar] link de adjuntos no disponible:", e.message || e); return null; }),
-  ]);
-  ficha.reclamos_anio_fiscal = reclamosDelAnio;
-  ficha.anio_reclamos = anioReclamos;
-  // Los adjuntos reales exigen un captcha en el sitio de Mercado Publico: se le entrega al cliente el
-  // link ya armado para que lo resuelva el mismo (ver /panel/analizar-adjunto).
-  ficha.enlace_adjuntos = enlaceAdjuntos;
+  // 11-10-2026: los reclamos del organismo y el link de adjuntos YA NO se sacan con el navegador (fallaban en el
+  // servidor y sumaban ~1 minuto). Se le sugiere al cliente verificar los reclamos él mismo y se le da el enlace
+  // directo a la ficha, donde está «Ver adjuntos». Solo las bases usan navegador, y solo en licitaciones.
+  const basesInfo = tipo === "Licitación"
+    ? await leerBasesLicitacion(codigo).catch(e => { console.error("[analizar] bases no disponibles:", e.message || e); return { bases: null }; })
+    : { bases: null };
   return { ok: true, ficha, tipo, bases: basesInfo && basesInfo.bases };
 }
 
@@ -2066,8 +2062,6 @@ function hoyEnChile() {
 }
 
 function pedirAnalisisObjetivoIA(ficha, basesTexto) {
-  const reclamos = ficha.reclamos_anio_fiscal === null || ficha.reclamos_anio_fiscal === undefined
-    ? "no se pudo obtener" : `${ficha.reclamos_anio_fiscal} reclamos`;
   const prompt = `Eres Terri, asesora comercial experta en Mercado Público de Chile. Analiza esta oportunidad EN DETALLE para alguien que va a decidir si postula y cómo preparar su propuesta. Habla en español, claro y directo. Usa SOLO los datos que te entrego: si algo no viene, dilo con naturalidad en vez de inventarlo.
 
 Fecha de hoy: ${hoyEnChile()}.
@@ -2080,7 +2074,7 @@ Responde ÚNICAMENTE con un JSON válido (sin texto antes ni después, sin bloqu
   "recaudos": [ {"documento": "nombre del documento, anexo, declaración, certificado o respuesta en plataforma", "detalle": "qué debe contener, quién lo firma y cómo o dónde se entrega", "tipo": "administrativo | técnico | económico | garantía | para contratar", "obligatorio": true} ],
   "criterios": [ {"criterio": "nombre", "peso": "20%", "como_sumar": "qué hacer para sacar buen puntaje en ese criterio"} ],
   "garantias_pagos": "garantías exigidas (monto, vigencia, cuándo se entregan) y plazo y forma de pago; vacío si no hay datos",
-  "alertas": [ "causales de inadmisibilidad o descalificación, visita a terreno obligatoria, plazos por vencer, reclamos del organismo" ],
+  "alertas": [ "causales de inadmisibilidad o descalificación, visita a terreno obligatoria, plazos por vencer" ],
   "recomendacion": { "veredicto": "Conviene postular | Postula con cautela | No conviene", "porque": "2-4 líneas con la razón concreta" }
 }
 
@@ -2091,7 +2085,6 @@ Reglas:
 - "recaudos": lista TODO lo que las bases exigen para ofertar (documentos administrativos, técnicos y económicos, anexos, declaraciones juradas, respuestas en la plataforma) y para contratar (certificados, vigencias, garantías). Un ítem por documento, con el detalle exacto. Si no tienes el texto de las bases, deja la lista vacía y dilo en "alertas".
 - "criterios": todos los de la tabla de evaluación, con su ponderación exacta. Explica "como_sumar" de forma práctica.
 - Si hay visita a terreno obligatoria, indícalo en "alertas": sin asistir queda descalificado sin importar la oferta.
-- Reclamos del organismo comprador en ${ficha.anio_reclamos}: ${reclamos}. Si el número es alto, coméntalo como una señal razonable de atención (por ejemplo atrasos de pago) sin exagerar; si no se pudo obtener, no lo menciones.
 - Si el proceso ya está cerrado según las fechas, dilo en "alertas".
 - No menciones precios ni cifras que no estén en los datos.
 

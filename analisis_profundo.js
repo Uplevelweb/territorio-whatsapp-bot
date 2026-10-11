@@ -180,8 +180,9 @@ async function leerBasesLicitacion(codigo) {
   try {
     await pagina.goto(
       `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(codigo)}`,
-      { waitUntil: "networkidle", timeout: 25000 }
+      { waitUntil: "load", timeout: 25000 }
     );
+    await pagina.waitForLoadState("networkidle", { timeout: 6000 }).catch(() => null);
     const texto = await pagina.textContent("body");
     if (!texto) return { bases: null, reclamos_12_meses_texto: null };
 

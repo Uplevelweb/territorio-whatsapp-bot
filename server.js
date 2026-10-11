@@ -242,6 +242,8 @@ async function plantillaA(telefono, parametros) {
 // y dos botones: «Ver las mejores» (respuesta rapida, payload ver_mejores) y «Abrir mi panel» (URL).
 // Si WHATSAPP_TEMPLATE_ALERTA_RESUMEN no esta puesta, se sigue usando la plantilla vieja de 2 datos.
 const PLANTILLA_RESUMEN = process.env.WHATSAPP_TEMPLATE_ALERTA_RESUMEN || "";
+// OJO: esta plantilla se creo como «Spanish» (es), no «Spanish (CHL)» como la vieja: el codigo de idioma tiene que calzar.
+const IDIOMA_PLANTILLA_RESUMEN = process.env.WHATSAPP_TEMPLATE_IDIOMA_RESUMEN || "es";
 async function plantillaResumenA(telefono, parametros) {
   const usados = parametros.slice(0, 4).map(t => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, 200) || "-");
   if (usados.length < 4) return { ok: false, estado: "error", detalle: "El resumen necesita 4 datos", id: null };
@@ -250,7 +252,7 @@ async function plantillaResumenA(telefono, parametros) {
     type: "template",
     template: {
       name: PLANTILLA_RESUMEN,
-      language: { code: IDIOMA_PLANTILLA_ALERTA },
+      language: { code: IDIOMA_PLANTILLA_RESUMEN },
       components: [{ type: "body", parameters: usados.map(texto => ({ type: "text", text: texto })) }],
     },
   });

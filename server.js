@@ -1164,6 +1164,9 @@ async function manejarTexto(telefono, sesion, texto) {
     }
     // escribio otra cosa: si se esta llenando un dato libre se suelta el menu; si no, se conserva
     if (String(sesion.paso).startsWith("pedir_")) menuPendiente.delete(telefono);
+    // Regla de Serling: la conversacion sigue la ultima pregunta; si la respuesta no calza, se REPITE esa
+    // pregunta (no se vuelve al menu de arriba). «hola»/«menu» siguen siendo la salida de emergencia.
+    else if (!/^(hola|menu|menú|buenas|inicio)\b/i.test(t)) return repetirUltimo(telefono, sesion, "No te entendí del todo 🙂");
   }
 
   // "hola"/"menu" siempre reinician la conversacion, sea cual sea el paso en
@@ -1533,20 +1536,50 @@ function preguntarTelefonoContacto(telefono, sesion) {
 }
 
 // --- Respuestas a botones y listas -------------------------------------------
-// «Ver las mejores»: las 3 mejores oportunidades del resumen de hoy. Texto libre: el cliente acaba de
-// escribir (tocar el boton abre la ventana de 24 h), asi que no hace falta otra plantilla.
+// «Ver las mejores»: de 5 a 10 oportunidades de hoy, cada una con lo esencial en 2-3 lineas, y se puede pedir el
+// detalle de una respondiendo con su numero. Texto libre: el cliente acaba de tocar un boton (abre la ventana de
+// 24 h), asi que no hace falta otra plantilla. Mas oportunidades y el analisis de Terri: panel y correo.
+const URL_PANEL = "https://territorio.uplevelweb.art/panel/";
+function lineaOportunidad(m) {
+  const icono = m.tipo === "Compra ágil" ? "🔔" : "📑";
+  const datos = [m.tipo, m.monto, m.cierre ? "cierra " + m.cierre : ""].filter(Boolean).join(" · ");
+  return `${icono} *${String(m.titulo || "").slice(0, 90)}*\n     ${datos}${m.visita ? "\n     ⚠️ Visita a terreno obligatoria: " + m.visita : ""}\n`;
+}
+function mostrarListaMejores(telefono, sesion, encabezado) {
+  const mejores = (sesion.alerta && sesion.alerta.mejores) || [];
+  const opciones = mejores.map((m, i) => ({ id: "op_" + i, titulo: lineaOportunidad(m) }));
+  return listaNumA(telefono, encabezado, opciones);
+}
 async function mostrarMejoresDeHoy(telefono, sesion) {
   const mejores = (sesion.alerta && sesion.alerta.mejores) || [];
   if (!mejores.length) {
-    return textoA(telefono, "No tengo el detalle de hoy a mano 🙈. Ábrelo completo en tu panel: https://territorio.uplevelweb.art/panel/");
+    return textoA(telefono, "No tengo el detalle de hoy a mano 🙈. Ábrelo completo en tu panel: " + URL_PANEL);
   }
-  const lineas = mejores.map((m, i) => `${i + 1}. *${m.titulo}*\n${[m.tipo, m.comprador, m.cierre ? "cierra " + m.cierre : ""].filter(Boolean).join(" · ")}${m.enlace ? "\n" + m.enlace : ""}`);
-  return textoA(telefono, `🏆 Las mejores de hoy:\n\n${lineas.join("\n\n")}\n\nEl resto, con su análisis, en tu panel: https://territorio.uplevelweb.art/panel/`);
+  await mostrarListaMejores(telefono, sesion, `🏆 *Las mejores de hoy* (${mejores.length})\nResponde con el *número* para ver el detalle de una.`);
+  return textoA(telefono, `¿Quieres más oportunidades o el análisis de Terri? Están completas en tu panel y en tu correo: ${URL_PANEL}`);
+}
+async function detalleOportunidad(telefono, sesion, i) {
+  const m = ((sesion.alerta && sesion.alerta.mejores) || [])[i];
+  if (!m) return mostrarMejoresDeHoy(telefono, sesion);
+  const lineas = [
+    `*${m.titulo}*`,
+    `📌 ${m.tipo}${m.codigo ? " N° " + m.codigo : ""}`,
+    m.comprador ? `🏛️ ${m.comprador}${m.region ? " · " + m.region : ""}` : "",
+    m.monto ? `💰 ${m.monto}` : "",
+    m.cierre ? `⏰ Cierra ${m.cierre}` : "",
+    m.visita ? `⚠️ Visita a terreno obligatoria: ${m.visita}. Sin asistir, quedas fuera.` : "",
+    m.enlace ? `🔗 Mercado Público: ${m.enlace}` : "",
+    `🤖 El análisis de Terri (recaudos, criterios y cómo sumar puntaje) y quién compite: ${URL_PANEL}`,
+  ].filter(Boolean);
+  await textoA(telefono, lineas.join("\n"));
+  return mostrarListaMejores(telefono, sesion, "¿Quieres ver otra? Responde con su *número*.");
 }
 
 async function manejarInteractivo(telefono, sesion, interactivo) {
   const id = interactivo.button_reply?.id || interactivo.list_reply?.id;
   menuPendiente.delete(telefono);
+
+  if (id && id.startsWith("op_")) return detalleOportunidad(telefono, sesion, parseInt(id.slice(3), 10));
 
   // Rubros cerrados (ver arriba)
   if (id === "fam_otro") {
@@ -1863,7 +1896,7 @@ app.post("/tareas/enviar-alerta-whatsapp", async (req, res) => {
     if (r.ok && conResumen && Array.isArray(mejores)) {
       // Lo que se responde al tocar «Ver las mejores»: queda en la sesion del cliente.
       const ses = await sesionDe(telefono);
-      ses.alerta = { fecha: new Date().toISOString(), mejores: mejores.slice(0, 3) };
+      ses.alerta = { fecha: new Date().toISOString(), mejores: mejores.slice(0, 10) };
       await guardarConversacion(telefono, ses);
     }
     const estado = r.ok ? "enviado" : (r.estado === "sin_plantilla" ? "sin_plantilla" : "error");

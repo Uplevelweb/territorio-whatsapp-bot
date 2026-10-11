@@ -523,13 +523,34 @@ async function notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto)
 // (diseño web / SaaS / hablar con una persona, sin IA de por medio) pueda
 // avisar exactamente igual -mismo WhatsApp directo a Serling + mismo
 // respaldo por correo en bot_derivaciones-, sin duplicar el codigo.
+// 11-10-2026: el soporte es 24 horas, asi que el aviso a Serling NO puede depender de la ventana de 24 h de Meta.
+// Con WHATSAPP_TEMPLATE_SOPORTE (plantilla aprobada, 2 variables: {{1}} WhatsApp del cliente, {{2}} motivo) llega
+// siempre. Sin ella, o si falla, se intenta texto libre (solo llega si Serling le escribio al bot en las ultimas 24 h).
+const PLANTILLA_SOPORTE = process.env.WHATSAPP_TEMPLATE_SOPORTE || "";
+async function avisarSoporteAWhatsapp(telefono, motivo, resumen, contacto) {
+  const limpio = (t) => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, 180) || "-";
+  if (PLANTILLA_SOPORTE) {
+    const r = await enviar({
+      to: NUMERO_DERIVACION, type: "template",
+      template: { name: PLANTILLA_SOPORTE, language: { code: "es" }, components: [{ type: "body", parameters: [
+        { type: "text", text: "+" + telefono },
+        { type: "text", text: limpio(`${resumen} · ${contacto}`) },
+      ] }] },
+    });
+    if (r.ok) return r;
+    console.error("⚠️ La plantilla de soporte fallo; se intenta texto libre:", r.detalle);
+  }
+  const r = await textoA(NUMERO_DERIVACION,
+    `🔔 *Soporte humano pedido*\nCliente (WhatsApp): +${telefono}\nAbrir chat: https://wa.me/${telefono}\nRUT/correo: ${contacto}\nMotivo: ${motivo}\nResumen: ${resumen}`);
+  if (!r.ok) throw new Error("WhatsApp no entrego el aviso: " + r.detalle);
+  return r;
+}
+
 async function derivarAHumano(telefono, motivo, resumen, contacto) {
   console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${motivo} | Contacto: ${contacto} | Resumen: ${resumen}`);
   // 11-10-2026, pedido de Serling: el aviso sale a su WhatsApp personal Y al correo AL MISMO TIEMPO, para
   // que no se escape el caso. Si uno falla, el otro igual sale (y queda guardado en bot_derivaciones).
-  const avisoWhatsapp = NUMERO_DERIVACION
-    ? textoA(NUMERO_DERIVACION,
-        `🔔 *Soporte humano pedido*\nCliente (WhatsApp): +${telefono}\nAbrir chat: https://wa.me/${telefono}\nRUT/correo: ${contacto}\nMotivo: ${motivo}\nResumen: ${resumen}\n\nSe le dijo que lo contactamos en ~30 min o más (WhatsApp, correo o teléfono).`)
+  const avisoWhatsapp = NUMERO_DERIVACION ? avisarSoporteAWhatsapp(telefono, motivo, resumen, contacto)
     : Promise.reject(new Error("NUMERO_DERIVACION no esta configurado"));
   const resultados = await Promise.allSettled([avisoWhatsapp, notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto)]);
   resultados.forEach((r, i) => {
@@ -558,7 +579,7 @@ async function confirmarSoporte(telefono, sesion) {
   await derivarAHumano(telefono, "pidio_soporte", resumen, contacto);
   sesion.paso = "derivado";
   sesion.retorno = null;
-  return textoA(telefono, "Listo 🙌 Ya avisamos a nuestro equipo. Te vamos a contactar en un lapso de 30 minutos o más, por este WhatsApp, por correo o por teléfono.");
+  return textoA(telefono, "Listo 🙌 Ya avisamos a nuestro equipo. Serás atendido a la brevedad posible, por este WhatsApp, por correo o por teléfono.");
 }
 
 function seguirTrasSoporte(telefono, sesion) {

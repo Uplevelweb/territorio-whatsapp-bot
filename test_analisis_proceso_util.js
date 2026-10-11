@@ -8,6 +8,9 @@ assert.deepStrictEqual(extraerJson('Aqui va:\n```json\n{"a":1}\n```'), { a: 1 })
 assert.strictEqual(extraerJson("sin json"), null);
 assert.strictEqual(extraerJson('{"roto": '), null);
 assert.strictEqual(extraerJson("[1,2]"), null);
+// JSON cortado a medias por falta de espacio: se rescata lo completo
+const cortado = '```json\n{"resumen":"hola, mundo","recaudos":[{"documento":"A","detalle":"x"},{"documento":"B","detalle":"cortad';
+assert.deepStrictEqual(extraerJson(cortado), { resumen: "hola, mundo", recaudos: [{ documento: "A", detalle: "x" }, { documento: "B" }] });
 
 // 2) normalizar: faltan claves, tipos raros, obligatorio por defecto true
 const n = normalizarAnalisis({ resumen: " hola ", enfasis: [{ punto: "x", porque: "y" }, { porque: "sin punto" }],

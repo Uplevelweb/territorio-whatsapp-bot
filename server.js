@@ -1973,10 +1973,11 @@ async function analizarProceso(codigo, perfil) {
     if (!r.ok) return r;
     ficha = r.ficha; tipo = r.tipo;
     const bruto = await pedirAnalisisObjetivoIA(ficha, r.bases);
-    analisis = normalizarAnalisis(extraerJson(bruto)) || (bruto ? normalizarAnalisis({ resumen: bruto }) : null);
+    const leido = normalizarAnalisis(extraerJson(bruto));
+    analisis = leido || (bruto ? normalizarAnalisis({ resumen: bruto.slice(0, 600) }) : null);
     // Una licitacion cuyas bases no se pudieron leer queda con un analisis pobre: no se guarda, para que
     // la proxima consulta lo intente de nuevo en vez de repartir el pobre a todos por 10 dias.
-    const completo = analisis && (tipo !== "Licitación" || r.bases);
+    const completo = leido && (tipo !== "Licitación" || (r.bases && (leido.criterios.length || leido.recaudos.length)));
     if (completo) {
       const { enlace_adjuntos, ...fichaGuardable } = ficha;
       rpcPanel("bot_analisis_guardar", { p_codigo: codigo, p_tipo: tipo, p_ficha: fichaGuardable, p_analisis: analisis })
@@ -2086,6 +2087,7 @@ Responde ÚNICAMENTE con un JSON válido (sin texto antes ni después, sin bloqu
 Reglas:
 - "enfasis": entre 3 y 5 puntos y SIEMPRE con su porqué; empieza por los criterios de mayor ponderación.
 - "preparacion": entre 4 y 7 pasos en orden cronológico, con la clave de cada uno (qué se rechaza si falta, qué suma puntaje).
+- Sé conciso: cada "detalle", "como_sumar" y "porque" en máximo 2 frases cortas (unos 200 caracteres); no más de 25 recaudos (agrupa los menores).
 - "recaudos": lista TODO lo que las bases exigen para ofertar (documentos administrativos, técnicos y económicos, anexos, declaraciones juradas, respuestas en la plataforma) y para contratar (certificados, vigencias, garantías). Un ítem por documento, con el detalle exacto. Si no tienes el texto de las bases, deja la lista vacía y dilo en "alertas".
 - "criterios": todos los de la tabla de evaluación, con su ponderación exacta. Explica "como_sumar" de forma práctica.
 - Si hay visita a terreno obligatoria, indícalo en "alertas": sin asistir queda descalificado sin importar la oferta.
@@ -2096,7 +2098,7 @@ Reglas:
 Datos de la ficha:
 ${JSON.stringify({ ...ficha, enlace_adjuntos: undefined }, null, 2)}
 ${basesTexto ? `\nContenido real de las bases (secciones de la ficha de Mercado Público):\n${basesTexto}` : "\n(No se pudo leer el texto de las bases para este proceso.)"}`;
-  return llamarClaudeJson(prompt, 4000);
+  return llamarClaudeJson(prompt, 8000);
 }
 
 async function pedirParaTiIA(ficha, analisis, perfil) {

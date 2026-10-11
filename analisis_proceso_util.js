@@ -7,13 +7,46 @@ function extraerJson(texto) {
   if (!texto || typeof texto !== "string") return null;
   const ini = texto.indexOf("{");
   const fin = texto.lastIndexOf("}");
-  if (ini < 0 || fin <= ini) return null;
+  if (ini < 0 || fin <= ini) return reparar(texto.slice(Math.max(ini, 0)));
   try {
     const dato = JSON.parse(texto.slice(ini, fin + 1));
     return dato && typeof dato === "object" && !Array.isArray(dato) ? dato : null;
   } catch (_e) {
-    return null;
+    return reparar(texto.slice(ini));
   }
+}
+
+// Si la IA se quedo sin espacio, el JSON viene cortado a medias (11-10-2026: 12.000 caracteres sin cerrar y
+// todo terminaba pegado en "resumen"). Se recorta hasta la ultima coma que deja un JSON valido al cerrar
+// los corchetes abiertos: se pierde el ultimo pedazo, no el analisis entero.
+function reparar(texto) {
+  const ini = texto.indexOf("{");
+  if (ini < 0) return null;
+  const t = texto.slice(ini);
+  const pila = [];
+  const cortes = [];
+  let enCadena = false, escapado = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (enCadena) {
+      if (escapado) escapado = false;
+      else if (c === "\\") escapado = true;
+      else if (c === '"') enCadena = false;
+      continue;
+    }
+    if (c === '"') enCadena = true;
+    else if (c === "{") pila.push("}");
+    else if (c === "[") pila.push("]");
+    else if (c === "}" || c === "]") pila.pop();
+    else if (c === ",") cortes.push({ i, cierre: pila.slice().reverse().join("") });
+  }
+  for (let k = cortes.length - 1; k >= 0; k--) {
+    try {
+      const dato = JSON.parse(t.slice(0, cortes[k].i) + cortes[k].cierre);
+      if (dato && typeof dato === "object" && !Array.isArray(dato)) return dato;
+    } catch (_e) { /* probar un corte anterior */ }
+  }
+  return null;
 }
 
 const lista = (x) => (Array.isArray(x) ? x : []);

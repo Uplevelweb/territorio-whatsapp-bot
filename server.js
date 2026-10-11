@@ -244,6 +244,10 @@ async function plantillaA(telefono, parametros) {
 // solo el texto numerado. En ambos casos se puede responder con el numero.
 // `menuPendiente` guarda, por telefono, los ids del ultimo menu mostrado.
 const menuPendiente = new Map();
+// 11-10-2026: el bot NO usa IA en el chat. La conversacion sigue SIEMPRE la linea de la ultima
+// respuesta del cliente: si escribe algo que no calza, se REPITE la ultima pregunta con sus opciones
+// (nunca se vuelve a un menu superior). `ultimoPrompt` guarda esa ultima pregunta por telefono.
+const ultimoPrompt = new Map();
 
 function textoNumerado(texto, opciones, pie) {
   return texto + "\n\n" + opciones.map((o, i) => `${i + 1}. ${o.titulo}`).join("\n") + "\n\n" + pie;
@@ -251,6 +255,7 @@ function textoNumerado(texto, opciones, pie) {
 
 function listaNumA(telefono, texto, opciones) {
   menuPendiente.set(telefono, opciones.map(o => o.id));
+  ultimoPrompt.set(telefono, { tipo: "lista", texto, opciones });
   return textoA(telefono, textoNumerado(texto, opciones, "👉 Responde con el *número* de tu opción."));
 }
 
@@ -262,6 +267,7 @@ function botonesA(telefono, texto, botones) {
   });
   if (botones.length > 3) console.error(`⚠️ Mas de 3 botones (${botones.length}): el mensaje va a fallar.`);
   menuPendiente.set(telefono, botones.map(b => b.id));
+  ultimoPrompt.set(telefono, { tipo: "botones", texto, botones });
   const cuerpo = textoNumerado(texto, botones, "👉 Toca un botón o responde con el *número*.");
   if (cuerpo.length > 1024) console.error(`⚠️ Cuerpo de botones demasiado largo (${cuerpo.length}/1024): el mensaje va a fallar.`);
   return enviar({
@@ -278,6 +284,42 @@ function botonesA(telefono, texto, botones) {
       },
     },
   });
+}
+
+// Preguntas de los pasos en que se escribe (no hay botones que repetir).
+const PREGUNTA_PASO = {
+  pedir_email: "¿Cuál es tu correo? (ej: nombre@empresa.cl)",
+  pedir_email_confirmar: "Escribe tu correo una vez más, para confirmarlo.",
+  pedir_nombre: "¿A nombre de quién o de qué empresa?",
+  pedir_palabras: "¿Qué vendes? Escríbelo con palabras separadas por coma (ej: aseo, ferretería, notebooks).",
+  pedir_telefono_otro: "¿Cuál es el celular donde te podemos ubicar? (con código de área)",
+  pedir_identificador_cliente: "Pásame tu RUT o el correo con el que te inscribiste.",
+  pedir_motivo_uplevel: "Cuéntame en una línea qué necesitas.",
+  pedir_email_uplevel: "¿Cuál es tu correo, para que el equipo te escriba?",
+  pedir_email_uplevel_confirmar: "Escribe tu correo una vez más, para evitar errores de tipeo.",
+  multi_rubros: "Responde con los números de la lista separados por coma (ej: 1,3,5) o escribe *todos*.",
+};
+
+// Repite la ULTIMA pregunta (con sus opciones) hasta que el cliente elija una opcion clara.
+function repetirUltimo(telefono, sesion, aviso) {
+  const pre = aviso || "No te entendí del todo 🙂 Elige una de las opciones:";
+  const u = ultimoPrompt.get(telefono) || sesion?.ultimo || null;
+  const pregunta = PREGUNTA_PASO[sesion?.paso];
+  if (pregunta) {
+    return textoA(telefono, pre + "\n\n" + pregunta);
+  }
+  if (u?.tipo === "botones") {
+    const r = botonesA(telefono, pre + "\n\n" + u.texto, u.botones);
+    ultimoPrompt.set(telefono, u); // que repetir no vaya acumulando el aviso
+    return r;
+  }
+  if (u?.tipo === "lista") {
+    const r = listaNumA(telefono, pre + "\n\n" + u.texto, u.opciones);
+    ultimoPrompt.set(telefono, u);
+    return r;
+  }
+  sesion.paso = "inicio";
+  return menuPrincipal(telefono);
 }
 
 // Manda el resumen en PDF como archivo adjunto, no como link — así la
@@ -378,7 +420,7 @@ function menuConsultoria(telefono, sesion) {
   sesion.paso = "inicio";
   return botonesA(telefono, TXT_CONSULTORIA + "\n\n¿La reservamos? 👇", [
     { id: "consultoria_reservar", titulo: "Reservar mi sesión" },
-    { id: "menu_inicio", titulo: "↩ Volver" },
+    { id: "menu_persona", titulo: "🙋 Con una persona" },
   ]);
 }
 
@@ -389,7 +431,6 @@ function menuOtraConsulta(telefono, sesion) {
     [
       { id: "menu_web", titulo: "💻 Web o sistema" },
       { id: "menu_persona", titulo: "🙋 Una persona" },
-      { id: "menu_inicio", titulo: "↩ Volver" },
     ]);
 }
 
@@ -484,13 +525,58 @@ async function notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto)
 // respaldo por correo en bot_derivaciones-, sin duplicar el codigo.
 async function derivarAHumano(telefono, motivo, resumen, contacto) {
   console.log(`🔔 Derivando a humano. De: ${telefono} | Motivo: ${motivo} | Contacto: ${contacto} | Resumen: ${resumen}`);
-  if (NUMERO_DERIVACION) {
-    await textoA(NUMERO_DERIVACION,
-      `🔔 *Derivar a humano*\nDe (WhatsApp): ${telefono}\nRUT/correo: ${contacto}\nMotivo: ${motivo}\nResumen: ${resumen}`);
-  } else {
-    console.error("⚠️ NUMERO_DERIVACION no esta configurado: el aviso de derivacion no se pudo mandar.");
-  }
-  await notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto);
+  // 11-10-2026, pedido de Serling: el aviso sale a su WhatsApp personal Y al correo AL MISMO TIEMPO, para
+  // que no se escape el caso. Si uno falla, el otro igual sale (y queda guardado en bot_derivaciones).
+  const avisoWhatsapp = NUMERO_DERIVACION
+    ? textoA(NUMERO_DERIVACION,
+        `🔔 *Soporte humano pedido*\nCliente (WhatsApp): +${telefono}\nAbrir chat: https://wa.me/${telefono}\nRUT/correo: ${contacto}\nMotivo: ${motivo}\nResumen: ${resumen}\n\nSe le dijo que lo contactamos en ~30 min o más (WhatsApp, correo o teléfono).`)
+    : Promise.reject(new Error("NUMERO_DERIVACION no esta configurado"));
+  const resultados = await Promise.allSettled([avisoWhatsapp, notificarDerivacionPorCorreo(telefono, motivo, resumen, contacto)]);
+  resultados.forEach((r, i) => {
+    if (r.status === "rejected") console.error(`⚠️ Aviso de derivacion (${i === 0 ? "WhatsApp" : "correo"}) fallo:`, r.reason?.message || r.reason);
+  });
+}
+
+// --- Soporte humano con confirmacion (11-10-2026) -------------------------------
+// Pedir soporte pasa SIEMPRE por un "¿seguro?". Si dice que no, se sigue donde iba (no se vuelve a ningun menu).
+function pedirConfirmarSoporte(telefono, sesion, motivo) {
+  if (sesion.paso === "confirmar_soporte") return repetirUltimo(telefono, sesion);
+  sesion.retorno = { paso: sesion.paso || "inicio", prompt: ultimoPrompt.get(telefono) || sesion.ultimo || null };
+  sesion.datos = sesion.datos || {};
+  sesion.datos.motivoSoporte = motivo || "Pidió soporte humano";
+  sesion.paso = "confirmar_soporte";
+  return botonesA(telefono, "🙋 ¿Seguro que quieres pedir *soporte humano*? Una persona del equipo te va a contactar.", [
+    { id: "soporte_si", titulo: "Sí, pedir soporte" },
+    { id: "soporte_no", titulo: "No, seguir" },
+  ]);
+}
+
+async function confirmarSoporte(telefono, sesion) {
+  const cli = sesion.datos?.clienteIdentificado;
+  const contacto = cli?.email || sesion.datos?.email || sesion.datos?.emailUplevel || "no proporcionado";
+  const resumen = (cli?.nombre ? `Cliente: ${cli.nombre}. ` : "") + (sesion.datos?.motivoSoporte || "Soporte humano");
+  await derivarAHumano(telefono, "pidio_soporte", resumen, contacto);
+  sesion.paso = "derivado";
+  sesion.retorno = null;
+  return textoA(telefono, "Listo 🙌 Ya avisamos a nuestro equipo. Te vamos a contactar en un lapso de 30 minutos o más, por este WhatsApp, por correo o por teléfono.");
+}
+
+function seguirTrasSoporte(telefono, sesion) {
+  const r = sesion.retorno || {};
+  sesion.retorno = null;
+  sesion.paso = r.paso || "inicio";
+  if (r.prompt) ultimoPrompt.set(telefono, r.prompt);
+  return repetirUltimo(telefono, sesion, "Perfecto, seguimos donde íbamos 👍");
+}
+
+// Despues de contestar una duda: siguiente paso en la misma linea (no vuelve al menu de arriba).
+function menuSeguir(telefono, sesion) {
+  sesion.paso = "menu";
+  return botonesA(telefono, "¿Qué quieres hacer ahora? 👇", [
+    { id: "quiero_probar", titulo: "Quiero probar gratis" },
+    { id: "tengo_dudas", titulo: "Otra duda" },
+    { id: "menu_persona", titulo: "🙋 Con una persona" },
+  ]);
 }
 
 // Busca a quien dice "Ya soy cliente" por su RUT o su correo -acepta el RUT
@@ -1008,11 +1094,19 @@ async function manejarTexto(telefono, sesion, texto) {
   // el mismo texto que llevan ahora los correos ("No respondas este
   // correo. ¿Necesitas ayuda? Escríbenos por WhatsApp" -> wa.me con
   // "Necesito soporte" precargado).
-  if (t.includes("soporte")) {
-    const contacto = sesion.datos?.clienteIdentificado?.email || sesion.datos?.email || "no proporcionado";
-    await derivarAHumano(telefono, "pidio_soporte", `Escribió: "${texto.trim()}"`, contacto);
-    sesion.paso = "derivado";
-    return textoA(telefono, "Recibido 🙌 Le avisamos a Serling directo — en un momento te escribe por acá.");
+  // Confirmacion de soporte pendiente: acepta botones, "1"/"2", si/no. Cualquier otra cosa repite la pregunta.
+  if (sesion.paso === "confirmar_soporte") {
+    menuPendiente.delete(telefono);
+    if (/^(1|si|sí|s[ií] pedir|quiero)\b/.test(t)) return confirmarSoporte(telefono, sesion);
+    if (/^(2|no)\b/.test(t)) return seguirTrasSoporte(telefono, sesion);
+    return repetirUltimo(telefono, sesion);
+  }
+
+  // "soporte" escrito: pide confirmacion antes de avisar (salvo cuando se esta escribiendo un dato libre,
+  // por ejemplo un rubro "soporte técnico", que no es una peticion de ayuda).
+  const PASOS_LIBRES = ["pedir_nombre", "pedir_palabras", "pedir_palabras_extra", "pedir_motivo_uplevel", "pedir_identificador_cliente"];
+  if (t.includes("soporte") && !PASOS_LIBRES.includes(sesion.paso)) {
+    return pedirConfirmarSoporte(telefono, sesion, `Escribió: "${texto.trim()}"`);
   }
 
   // Respuesta por numero a un menu (formato unico, ver textoNumerado).
@@ -1026,7 +1120,8 @@ async function manejarTexto(telefono, sesion, texto) {
       }
       return textoA(telefono, `Responde con un número del 1 al ${pend.length} 🙂`);
     }
-    menuPendiente.delete(telefono); // escribio otra cosa: se sigue en conversacion libre
+    // escribio otra cosa: si se esta llenando un dato libre se suelta el menu; si no, se conserva
+    if (String(sesion.paso).startsWith("pedir_")) menuPendiente.delete(telefono);
   }
 
   // "hola"/"menu" siempre reinician la conversacion, sea cual sea el paso en
@@ -1041,7 +1136,9 @@ async function manejarTexto(telefono, sesion, texto) {
   // el cruce y entra directo a la rama que corresponde. Si no, se muestra
   // el menu de entrada completo (ver menuPrincipal). `!sesion.paso` cubre
   // una conversacion recien creada cuyo primer mensaje no dice "hola".
-  if (!sesion.paso || t === "menu" || esSaludo(t)) {
+  const quiereReiniciar = !sesion.paso || ((t === "menu" || esSaludo(t)) &&
+    (sesion.paso === "derivado" || (["inicio", "menu"].includes(sesion.paso) && !menuPendiente.has(telefono))));
+  if (quiereReiniciar) {
     sesion.historial = [];
     const origen = detectarOrigen(texto);
     if (origen === "territorio") return menuTerritorio(telefono, sesion);
@@ -1062,7 +1159,7 @@ async function manejarTexto(telefono, sesion, texto) {
     if (origen === "web") return iniciarUplevel(telefono, sesion, "Diseño de página web");
     if (origen === "saas") return iniciarUplevel(telefono, sesion, "Desarrollo de SaaS a medida");
     if (origen === "consultoria") return menuConsultoria(telefono, sesion);
-    return textoA(telefono, "Toca uno de los botones de arriba 👆, o cuéntame con tus palabras qué necesitas.");
+    return repetirUltimo(telefono, sesion);
   }
 
   // Conversacion ya derivada a una persona: la IA se queda callada -no
@@ -1075,8 +1172,9 @@ async function manejarTexto(telefono, sesion, texto) {
 
   // Cualquier otro mensaje libre, mientras no se este llenando un dato
   // puntual (correo, nombre, palabras, hora), lo conversa la IA -no el menu-.
+  // 11-10-2026: SIN IA en el chat. Una respuesta que no calza repite la ultima pregunta.
   if (sesion.paso === "menu") {
-    return responderConIA(telefono, sesion, texto);
+    return repetirUltimo(telefono, sesion);
   }
 
   // --- Recoleccion de datos, paso a paso (mismo orden que el formulario) ---
@@ -1169,8 +1267,8 @@ async function manejarTexto(telefono, sesion, texto) {
   // conversacion libre igual, sin trabar al cliente.
   if (sesion.paso === "pedir_identificador_cliente") {
     const cliente = await identificarCliente(texto.trim());
-    sesion.paso = "menu";
     if (cliente?.encontrado) {
+      sesion.paso = "menu";
       sesion.datos.clienteIdentificado = cliente;
       // Se borra lo que se hayan hablado antes de identificarse: ya se sabe
       // quien es y en que plan esta, que es lo que importa. Cargar historial
@@ -1178,9 +1276,13 @@ async function manejarTexto(telefono, sesion, texto) {
       // 12-09-2026-. La conversacion sobre su necesidad de HOY arranca limpia.
       sesion.historial = [];
       const primerNombre = cliente.nombre?.split(" ")[0] || "";
-      return textoA(telefono, `Listo${primerNombre ? ", " + primerNombre : ""} 👋 Ya te ubiqué. ¿En qué te ayudo?`);
+      return botonesA(telefono, `Listo${primerNombre ? ", " + primerNombre : ""} 👋 Ya te ubiqué. ¿Qué necesitas?`, [
+        { id: "duda_precio", titulo: "Planes y precios" },
+        { id: "duda_turnos", titulo: "Cuándo llegan" },
+        { id: "menu_persona", titulo: "🙋 Con una persona" },
+      ]);
     }
-    return textoA(telefono, "No encontré ese dato en el sistema 🤔 ¿Puedes revisarlo y escribirlo de nuevo? Si el problema sigue, cuéntame qué necesitas igual y avisamos al equipo.");
+    return textoA(telefono, "No encontré ese dato en el sistema 🤔 ¿Puedes revisarlo y escribirlo de nuevo (RUT o correo)? Si necesitas ayuda, escribe *soporte*.");
   }
 
   // --- Rama Uplevel: diseño web / SaaS / hablar con una persona ------------
@@ -1217,10 +1319,8 @@ async function manejarTexto(telefono, sesion, texto) {
     return textoA(telefono, "Listo 🎉 Le avisamos al equipo de Uplevel — en breve te contactan a este WhatsApp o a tu correo.");
   }
 
-  // Fuera de un paso reconocido: vuelve al menu de entrada en vez de
-  // quedarse mudo (no al de Territorio: no se sabe en que rama iba).
-  sesion.paso = "inicio";
-  return menuPrincipal(telefono);
+  // Fuera de un paso reconocido: se repite la ultima pregunta (o, si no hay ninguna, el menu de entrada).
+  return repetirUltimo(telefono, sesion);
 }
 
 async function confirmarInscripcion(telefono, sesion, hora) {
@@ -1448,13 +1548,13 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   if (id === "ver_resumen") {
     await documentoA(telefono, `${URL_BASE}/territorio-resumen.pdf`, "Territorio.pdf",
       "📄 El resumen de Territorio en una página: cómo funciona, paso a paso, y los 3 planes.");
-    return menuTerritorio(telefono, sesion);
+    return menuSeguir(telefono, sesion);
   }
 
   if (id === "ver_ejemplo") {
     await imagenA(telefono, `${URL_BASE}/asi-se-ve-el-correo.png`,
       "📬 Así llega tu correo, con Terri: quién compra, cuánto compra, quién se lo lleva y con qué te van a evaluar — todos los días a las 8:00 o a las 15:00. (Demostración con datos ficticios, igual a la de territorio.uplevelweb.art.)");
-    return menuTerritorio(telefono, sesion);
+    return menuSeguir(telefono, sesion);
   }
 
   if (id === "duda_precio") {
@@ -1465,19 +1565,19 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
       "• *Plan Acompañado* — $199.999/mes _(incluye 8 horas al mes de acompañamiento estratégico)_\n\n" +
       "🎯 *Consultoría individual* (60 min) — $24.999 por sesión\n\n" +
       "Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.");
-    return menuTerritorio(telefono, sesion);
+    return menuSeguir(telefono, sesion);
   }
 
   if (id === "duda_turnos") {
     await textoA(telefono,
       "🕗 Las alertas llegan a tu correo *dos veces al día*, de lunes a sábado: a las *8:00* y a las *15:00* — tú eliges el turno al inscribirte.");
-    return menuTerritorio(telefono, sesion);
+    return menuSeguir(telefono, sesion);
   }
 
   if (id === "duda_convenio") {
     await textoA(telefono,
       "🏛️ Territorio cubre licitaciones, compras ágiles *y* acciones comerciales de Convenio Marco — todo cruzado con las palabras clave que nos des, para que solo te llegue lo que realmente vendes.");
-    return menuTerritorio(telefono, sesion);
+    return menuSeguir(telefono, sesion);
   }
 
   if (id === "ya_soy_cliente") {
@@ -1493,7 +1593,9 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   if (id === "menu_inicio") { sesion.paso = "inicio"; return menuPrincipal(telefono); }
   if (id === "menu_web") return iniciarUplevel(telefono, sesion, "Página web o sistema (SaaS) a medida");
   if (id === "menu_saas") return iniciarUplevel(telefono, sesion, "Desarrollo de SaaS a medida");
-  if (id === "menu_persona") return iniciarUplevel(telefono, sesion, "Quiere hablar con una persona");
+  if (id === "menu_persona") return pedirConfirmarSoporte(telefono, sesion, "Quiere hablar con una persona");
+  if (id === "soporte_si") return confirmarSoporte(telefono, sesion);
+  if (id === "soporte_no") return seguirTrasSoporte(telefono, sesion);
 
   if (id === "hora_8") return confirmarInscripcion(telefono, sesion, 8);
   if (id === "hora_15") return confirmarInscripcion(telefono, sesion, 15);
@@ -1512,8 +1614,8 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
     return textoA(telefono, "Ya. ¿Cuál es el celular donde sí te podemos ubicar? (con código de área)");
   }
 
-  sesion.paso = "inicio";
-  return menuPrincipal(telefono);
+  // boton que ya no existe (mensaje viejo): se repite la ultima pregunta, no se vuelve al menu de arriba
+  return repetirUltimo(telefono, sesion, "Esa opción ya no está disponible 🙂 Elige una de estas:");
 }
 
 // --- Rutas de Meta ------------------------------------------------------------
@@ -1565,6 +1667,7 @@ app.post("/webhook", async (req, res) => {
     const telefono = mensaje.from;
     if (superaLimite(telefono)) { console.error(`⚠️ ${telefono} supero el tope de mensajes por minuto; se ignora.`); return; }
     const sesion = await sesionDe(telefono);
+    if (!ultimoPrompt.has(telefono) && sesion.ultimo) ultimoPrompt.set(telefono, sesion.ultimo);
     console.log(`📩 Mensaje de ${telefono} (tipo: ${mensaje.type}, paso: ${sesion.paso})`);
 
     if (mensaje.type === "text") {
@@ -1572,12 +1675,13 @@ app.post("/webhook", async (req, res) => {
     } else if (mensaje.type === "interactive") {
       await manejarInteractivo(telefono, sesion, mensaje.interactive);
     } else {
-      await textoA(telefono, "Por ahora solo entiendo texto y los botones de arriba 🙂");
+      await repetirUltimo(telefono, sesion, "Por ahora solo entiendo texto y los botones 🙂");
     }
 
     // Se guarda SIEMPRE al final, pase lo que pase arriba -asi la
     // conversacion sobrevive si el servidor se reinicia antes del proximo
     // mensaje, y la bandera de "derivado" queda a salvo tambien-.
+    sesion.ultimo = ultimoPrompt.get(telefono) || null;
     await guardarConversacion(telefono, sesion);
   } catch (error) {
     console.error("Error procesando el mensaje:", error);

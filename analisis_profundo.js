@@ -25,12 +25,49 @@ const { chromium } = require("playwright");
 
 let navegadorCompartido = null;
 async function obtenerNavegador() {
-  if (!navegadorCompartido) {
+  if (!navegadorCompartido || !navegadorCompartido.isConnected()) {
     navegadorCompartido = await chromium.launch({
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      // Render da 512 MB: todo lo que ahorre RAM cuenta (11-10-2026, el servicio
+      // murio por memoria con tres paginas abiertas a la vez).
+      args: [
+        "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+        "--disable-extensions", "--disable-background-networking",
+        "--disable-features=site-per-process,Translate",
+        "--js-flags=--max-old-space-size=256",
+        "--renderer-process-limit=1",
+      ],
     });
   }
   return navegadorCompartido;
+}
+
+// UNA pagina a la vez: tres Chromium-paginas en paralelo reventaban los 512 MB.
+// Las demas esperan su turno. Y se bloquean imagenes, fuentes y medios, que no
+// aportan texto y si memoria.
+let colaPaginas = Promise.resolve();
+async function abrirPagina() {
+  let soltar;
+  const turno = new Promise(r => { soltar = r; });
+  const espera = colaPaginas;
+  colaPaginas = colaPaginas.then(() => turno);
+  await espera;
+  try {
+    const navegador = await obtenerNavegador();
+    const pagina = await navegador.newPage();
+    await pagina.route("**/*", ruta => {
+      const t = ruta.request().resourceType();
+      return (t === "image" || t === "font" || t === "media") ? ruta.abort() : ruta.continue();
+    }).catch(() => null);
+    const cerrar = pagina.close.bind(pagina);
+    let liberada = false;
+    pagina.close = async (...a) => {
+      try { return await cerrar(...a); } finally { if (!liberada) { liberada = true; soltar(); } }
+    };
+    return pagina;
+  } catch (e) {
+    soltar();
+    throw e;
+  }
 }
 
 function formatoDDMMAAAA(fecha) {
@@ -53,8 +90,7 @@ async function contarReclamosDelAnio(nombreOrganismo) {
   const guardado = cacheReclamos.get(clave);
   if (guardado && guardado.expira > Date.now()) return guardado.valor;
 
-  const navegador = await obtenerNavegador();
-  const pagina = await navegador.newPage();
+  const pagina = await abrirPagina();
   try {
     await pagina.goto(
       "https://www.mercadopublico.cl/portal/modules/site/reclamos/busquedareclamos.aspx",
@@ -140,8 +176,7 @@ function armarBasesPorSecciones(texto) {
 }
 
 async function leerBasesLicitacion(codigo) {
-  const navegador = await obtenerNavegador();
-  const pagina = await navegador.newPage();
+  const pagina = await abrirPagina();
   try {
     await pagina.goto(
       `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(codigo)}`,
@@ -196,8 +231,7 @@ async function leerBasesLicitacion(codigo) {
 // analisis profundo (ver /panel/analizar-adjunto en server.js).
 async function obtenerLinkAdjuntos(codigo, tipo) {
   if (tipo !== "Licitación") return null; // las compras agiles no tienen este visor
-  const navegador = await obtenerNavegador();
-  const pagina = await navegador.newPage();
+  const pagina = await abrirPagina();
   try {
     await pagina.goto(
       `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(codigo)}`,

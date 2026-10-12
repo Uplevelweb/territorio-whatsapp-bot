@@ -271,7 +271,14 @@ const menuPendiente = new Map();
 const ultimoPrompt = new Map();
 
 function textoNumerado(texto, opciones, pie) {
-  return texto + "\n\n" + opciones.map((o, i) => `${i + 1}. ${o.titulo}`).join("\n") + "\n\n" + pie;
+  // Si las opciones traen `grupo`, se pone su titulo cada vez que cambia (la numeracion sigue corrida).
+  let grupoActual = null;
+  const lineas = opciones.map((o, i) => {
+    let cab = "";
+    if (o.grupo && o.grupo !== grupoActual) { cab = (i ? "\n" : "") + `*${o.grupo}*\n`; grupoActual = o.grupo; }
+    return `${cab}${i + 1}. ${o.titulo}`;
+  });
+  return texto + "\n\n" + lineas.join("\n") + "\n\n" + pie;
 }
 
 function listaNumA(telefono, texto, opciones) {
@@ -1540,13 +1547,18 @@ function preguntarTelefonoContacto(telefono, sesion) {
 // detalle de una respondiendo con su numero. Texto libre: el cliente acaba de tocar un boton (abre la ventana de
 // 24 h), asi que no hace falta otra plantilla. Mas oportunidades y el analisis de Terri: panel y correo.
 const URL_PANEL = "https://territorio.uplevelweb.art/panel/";
+const GRUPOS_MEJORES = [["Licitación", "📑 Licitaciones"], ["Compra ágil", "🔔 Compras ágiles"], ["Acción comercial", "🎯 Acciones comerciales"]];
 function lineaOportunidad(m) {
-  const icono = m.tipo === "Compra ágil" ? "🔔" : "📑";
-  return `${icono} *${String(m.titulo || "").slice(0, 90)}*${m.comprador ? "\n     🏛️ " + m.comprador : ""}\n`;
+  return `*${String(m.titulo || "").slice(0, 90)}*${m.codigo ? "\n     🆔 " + m.codigo : ""}${m.comprador ? "\n     🏛️ " + m.comprador : ""}\n`;
 }
 function mostrarListaMejores(telefono, sesion, encabezado) {
+  // Agrupadas por tipo (licitaciones, compras ágiles, acciones comerciales); el id `op_i` sigue apuntando
+  // a la posición original en sesion.alerta.mejores, así que el detalle no cambia.
   const mejores = (sesion.alerta && sesion.alerta.mejores) || [];
-  const opciones = mejores.map((m, i) => ({ id: "op_" + i, titulo: lineaOportunidad(m) }));
+  const opciones = [];
+  for (const [tipo, titulo] of GRUPOS_MEJORES) {
+    mejores.forEach((m, i) => { if (m.tipo === tipo) opciones.push({ id: "op_" + i, titulo: lineaOportunidad(m), grupo: titulo }); });
+  }
   return listaNumA(telefono, encabezado, opciones);
 }
 async function mostrarMejoresDeHoy(telefono, sesion) {
@@ -1554,13 +1566,19 @@ async function mostrarMejoresDeHoy(telefono, sesion) {
   if (!mejores.length) {
     return textoA(telefono, "No tengo el detalle de hoy a mano 🙈. Ábrelo completo en tu panel: " + URL_PANEL);
   }
-  await mostrarListaMejores(telefono, sesion, `🏆 *Las mejores de hoy*\n📑 Licitación · 🔔 Compra ágil\nResponde con el *número* para ver el detalle de una.`);
+  await mostrarListaMejores(telefono, sesion, `🏆 *Las mejores de hoy*\nResponde con el *número* para ver el detalle de una.`);
   return textoA(telefono, `¿Quieres más oportunidades o el análisis de Terri? Están completas en tu panel y en tu correo: ${URL_PANEL}`);
 }
 async function detalleOportunidad(telefono, sesion, i) {
   const m = ((sesion.alerta && sesion.alerta.mejores) || [])[i];
   if (!m) return mostrarMejoresDeHoy(telefono, sesion);
-  const lineas = [
+  const lineas = m.tipo === "Acción comercial" ? [
+    `*${m.titulo}*`,
+    `🏛️ ${m.comprador}${m.region ? " · " + m.region : ""}`,
+    m.monto ? `💰 Por ganar: ${m.monto}` : "",
+    m.direccion ? `📍 ${m.direccion}` : "",
+    `🤖 Quién compite y qué ofrecerles, en tu panel: ${URL_PANEL}`,
+  ].filter(Boolean) : [
     `*${m.titulo}*`,
     `📌 ${m.tipo}${m.codigo ? " N° " + m.codigo : ""}`,
     m.comprador ? `🏛️ ${m.comprador}${m.region ? " · " + m.region : ""}` : "",

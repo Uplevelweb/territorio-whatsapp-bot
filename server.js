@@ -1542,8 +1542,7 @@ function preguntarTelefonoContacto(telefono, sesion) {
 const URL_PANEL = "https://territorio.uplevelweb.art/panel/";
 function lineaOportunidad(m) {
   const icono = m.tipo === "Compra ágil" ? "🔔" : "📑";
-  const datos = [m.tipo, m.monto, m.cierre ? "cierra " + m.cierre : ""].filter(Boolean).join(" · ");
-  return `${icono} *${String(m.titulo || "").slice(0, 90)}*\n     ${datos}${m.visita ? "\n     ⚠️ Visita a terreno obligatoria: " + m.visita : ""}\n`;
+  return `${icono} *${String(m.titulo || "").slice(0, 90)}*${m.comprador ? "\n     🏛️ " + m.comprador : ""}\n`;
 }
 function mostrarListaMejores(telefono, sesion, encabezado) {
   const mejores = (sesion.alerta && sesion.alerta.mejores) || [];
@@ -1555,7 +1554,7 @@ async function mostrarMejoresDeHoy(telefono, sesion) {
   if (!mejores.length) {
     return textoA(telefono, "No tengo el detalle de hoy a mano 🙈. Ábrelo completo en tu panel: " + URL_PANEL);
   }
-  await mostrarListaMejores(telefono, sesion, `🏆 *Las mejores de hoy* (${mejores.length})\nResponde con el *número* para ver el detalle de una.`);
+  await mostrarListaMejores(telefono, sesion, `🏆 *Las mejores de hoy*\n📑 Licitación · 🔔 Compra ágil\nResponde con el *número* para ver el detalle de una.`);
   return textoA(telefono, `¿Quieres más oportunidades o el análisis de Terri? Están completas en tu panel y en tu correo: ${URL_PANEL}`);
 }
 async function detalleOportunidad(telefono, sesion, i) {

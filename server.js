@@ -851,9 +851,9 @@ Universo al que apunta: casi 40.000 proveedores que hoy le venden al Estado
 por alguna de las seis vías de Mercado Público.
 
 PLANES:
-- Plan Alerta: $19.999/mes (precio de lanzamiento)
-- Plan Inteligencia: $49.999/mes (con análisis de Terri)
-- Plan Acompañado: $199.999/mes (incluye 8 horas al mes de acompañamiento estratégico, revisión de ofertas, itinerario de visitas y email marketing a tu cartera)
+- Plan Alerta: $19.999/mes + IVA (precio de lanzamiento)
+- Plan Inteligencia: $49.999/mes + IVA (hasta 300 análisis al mes con Terri)
+- Plan Acompañado: $199.999/mes + IVA (análisis ilimitados con Terri; incluye 8 horas al mes de acompañamiento estratégico, revisión de ofertas, itinerario de visitas y email marketing a tu cartera)
 - Consultoría individual de Mercado Público: sesión de 60 minutos, $24.999 (precio de lanzamiento; después $49.999). Si la piden, ofrécela y derívala a una persona del equipo.
 Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.
 
@@ -918,7 +918,7 @@ CÓMO DEBES CONVERSAR:
 const HERRAMIENTAS_IA = [
   {
     name: "inscribir_prueba_gratis",
-    description: "Inscribe al cliente en la prueba gratis de 7 dias de Territorio, con los datos que ya se juntaron conversando y ya fueron confirmados (no a medio validar).",
+    description: "Inscribe al cliente en la prueba gratis de 15 dias de Territorio (con hasta 30 analisis de Terri), con los datos que ya se juntaron conversando y ya fueron confirmados (no a medio validar).",
     input_schema: {
       type: "object",
       properties: {
@@ -1399,7 +1399,7 @@ async function confirmarInscripcion(telefono, sesion, hora) {
       `Listo${nombre ? ", " + nombre : ""} 👋 Ya tenías una cuenta con este correo — actualizamos tus palabras clave y tu hora. Sigues recibiendo tu alerta cada mañana a las ${hora}:00, sin nada duplicado.`);
   }
   return textoA(telefono,
-    `Listo, ${nombre} 🎉 Quedaste inscrito con la prueba gratis de 14 días. Te llega un correo ahora mismo para confirmar tu dirección —revisa también spam o promociones si no lo ves enseguida—. Mañana a las ${hora}:00 te llega tu primera alerta.`);
+    `Listo, ${nombre} 🎉 Quedaste inscrito con la prueba gratis de 15 días. Te llega un correo ahora mismo para confirmar tu dirección —revisa también spam o promociones si no lo ves enseguida—. Mañana a las ${hora}:00 te llega tu primera alerta.`);
 }
 
 // --- Rubros cerrados (05-10-2026) -------------------------------------------
@@ -1663,9 +1663,9 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   if (id === "duda_precio") {
     await textoA(telefono,
       "💰 *Planes de Territorio*\n\n" +
-      "• *Plan Alerta* — $19.999/mes _(precio de lanzamiento)_\n" +
-      "• *Plan Inteligencia* — $49.999/mes _(con análisis de Terri)_\n" +
-      "• *Plan Acompañado* — $199.999/mes _(incluye 8 horas al mes de acompañamiento estratégico)_\n\n" +
+      "• *Plan Alerta* — $19.999/mes + IVA _(precio de lanzamiento)_\n" +
+      "• *Plan Inteligencia* — $49.999/mes + IVA _(hasta 300 análisis al mes con Terri)_\n" +
+      "• *Plan Acompañado* — $199.999/mes + IVA _(análisis ilimitados con Terri; incluye 8 horas al mes de acompañamiento estratégico)_\n\n" +
       "🎯 *Consultoría individual* (60 min) — $24.999 por sesión\n\n" +
       "Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.");
     return menuSeguir(telefono, sesion);
@@ -1894,7 +1894,7 @@ app.get("/pagar", async (req, res) => {
 // La alerta diaria por WhatsApp: la llama alertador.py (GitHub Actions),
 // una vez por suscriptor elegible, justo despues de mandarle el correo del
 // dia -mismo dato, mismo momento, dos canales-. Pedido de Serling el
-// 19-09-2026: "si ofrecemos WhatsApp en los 7 dias de prueba y en Plus y
+// 19-09-2026: "si ofrecemos WhatsApp en los dias de prueba y en Plus y
 // Premium, tiene que existir de verdad, no solo en el texto de la pagina".
 //
 // Quien es elegible HOY (lo decide alertador.py antes de llamar aca, no
@@ -2211,20 +2211,36 @@ Reglas:
   return llamarClaudeJson(prompt, 900).then(b => normalizarParaTi(extraerJson(b)));
 }
 
-// Verifica sesion + plan llamando a la MISMA funcion que ya usa el panel
-// para saber quien es -este modulo es solo Plus/Premium, igual que el
-// resto de "la plataforma".
-async function verificarPremiumOPlus(token) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/panel_quien_soy`, {
+// 12-10-2026, pedido de Serling: limites de analisis con Terri. Prueba gratis: 30 en total y maximo
+// 3 por dia. Inteligencia: 300 al mes. La cuenta la lleva la funcion analisis_cupo de Supabase (SQL
+// en limites-analisis-para-copiar.txt), que ademas reconoce el plan y la prueba: ya no basta con
+// «plus o premium». Falla CERRADO a proposito: si no se puede contar, no se gasta IA sin contar.
+async function cupoAnalisis(token, codigo, registrar) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/analisis_cupo`, {
     method: "POST",
     headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ p_token: token }),
+    body: JSON.stringify({ p_token: token, p_codigo: codigo || null, p_registrar: !!registrar }),
   });
   if (!r.ok) return null;
-  const filas = await r.json();
-  const yo = filas?.[0];
-  if (!yo || !["plus", "premium"].includes(yo.plan)) return null;
-  return yo;
+  return await r.json();
+}
+
+// Revisa el cupo ANTES de gastar IA. Devuelve null si se puede seguir, o responde el error y devuelve true.
+async function cortarSiSinCupo(res, token, codigo) {
+  const cupo = await cupoAnalisis(token, codigo, false);
+  if (!cupo) {
+    res.status(503).json({ ok: false, motivo: "No pudimos revisar tu cupo de análisis ahora. Inténtalo en un momento." });
+    return { cortado: true };
+  }
+  if (cupo.motivo === "token") {
+    res.status(403).json({ ok: false, motivo: "Tu sesión expiró (token). Entra de nuevo al panel." });
+    return { cortado: true };
+  }
+  if (!cupo.ok) {
+    res.status(403).json({ ok: false, limite: true, motivo: cupo.motivo || "Tu plan no incluye este análisis.", cupo });
+    return { cortado: true };
+  }
+  return { cortado: false, cupo };
 }
 
 const ORIGEN_PANEL = "https://territorio.uplevelweb.art";
@@ -2243,10 +2259,9 @@ app.post("/panel/analizar-proceso", async (req, res) => {
     return res.status(400).json({ ok: false, motivo: "Falta el token o el código de proceso." });
   }
 
-  const yo = await verificarPremiumOPlus(token);
-  if (!yo) {
-    return res.status(403).json({ ok: false, motivo: "Esta función es solo para los planes Inteligencia y Acompañado." });
-  }
+  const codigoCupo = String(codigo).trim().toUpperCase();
+  const control = await cortarSiSinCupo(res, token, codigoCupo);
+  if (control.cortado) return;
 
   try {
     // Lo que el cliente declaro en su panel (rubros, RUT de proveedor) para la parte «Para ti».
@@ -2255,7 +2270,11 @@ app.post("/panel/analizar-proceso", async (req, res) => {
       const f = await rpcPanel("panel_mis_filtros", { p_token: token });
       if (Array.isArray(f) && f[0]) perfil = perfilDeFiltros(f[0]);
     } catch (_e) { /* sin perfil: el analisis sale igual */ }
-    const resultado = await analizarProceso(String(codigo).trim().toUpperCase(), perfil);
+    const resultado = await analizarProceso(codigoCupo, perfil);
+    // Solo se cuenta si el analisis salio bien: un error nuestro no le quita uno.
+    if (resultado && resultado.ok) {
+      resultado.cupo = (await cupoAnalisis(token, codigoCupo, true)) || control.cupo;
+    }
     res.json(resultado);
   } catch (e) {
     console.error("Error en /panel/analizar-proceso:", e);
@@ -2567,10 +2586,10 @@ app.post("/panel/analizar-adjunto", subidaEnMemoria.single("archivo"), async (re
     return res.status(400).json({ ok: false, motivo: "Por ahora solo aceptamos el documento en PDF (no .zip ni otros formatos)." });
   }
 
-  const yo = await verificarPremiumOPlus(token);
-  if (!yo) {
-    return res.status(403).json({ ok: false, motivo: "Esta función es solo para los planes Inteligencia y Acompañado." });
-  }
+  // El analisis con el PDF de las bases cuenta como uno mas, aparte del de la ficha del mismo proceso.
+  const codigoCupo = "PDF-" + String(codigo).trim().toUpperCase();
+  const control = await cortarSiSinCupo(res, token, codigoCupo);
+  if (control.cortado) return;
 
   try {
     // Se vuelve a pedir la ficha (liviana, solo la API publica) para que la
@@ -2601,7 +2620,8 @@ app.post("/panel/analizar-adjunto", subidaEnMemoria.single("archivo"), async (re
     if (!analisis) {
       return res.status(500).json({ ok: false, motivo: "No pudimos generar el análisis ahora. Inténtalo de nuevo en un momento." });
     }
-    res.json({ ok: true, analisis });
+    const cupoDespues = (await cupoAnalisis(token, codigoCupo, true)) || control.cupo;
+    res.json({ ok: true, analisis, cupo: cupoDespues });
   } catch (e) {
     console.error("Error en /panel/analizar-adjunto:", e);
     res.status(500).json({ ok: false, motivo: "No pudimos procesar ese archivo ahora. Inténtalo de nuevo en un momento." });

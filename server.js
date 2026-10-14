@@ -89,11 +89,11 @@ if (!SUPABASE_CLAVE_SECRETA) console.warn("⚠️ Falta SUPABASE_CLAVE_SECRETA: 
 const FLOW_BASE = "https://www.flow.cl/api";
 // El identificador de cada plan tal cual quedo creado en el panel de Flow
 // (Suscripciones > Planes) el 12-09-2026.
-const FLOW_PLAN_ID = { inicio: "TERRITORIO_INICIO", plus: "TERRITORIO_PLUS", premium: "TERRITORIO_PREMIUM" };
+const FLOW_PLAN_ID = { inicio: "TERRITORIO_INICIO", plus: "TERRITORIO_PLUS", licitaciones: "TERRITORIO_LICITACIONES", premium: "TERRITORIO_PREMIUM" };
 
 // Nombre que ve el cliente (igual que la landing). Los codigos internos
 // (inicio/plus/premium) siguen siendo los de la base de datos y los de Flow.
-const NOMBRE_PLAN = { inicio: "Alerta", plus: "Inteligencia", premium: "Acompañado" };
+const NOMBRE_PLAN = { inicio: "Alerta", plus: "Inteligencia", licitaciones: "Licitaciones", premium: "Convenio Marco" };
 const nombrePlan = (codigo) => NOMBRE_PLAN[String(codigo || "").toLowerCase()] || codigo;
 
 const URL_BASE = URL_PUBLICA || "https://territorio-whatsapp-bot.onrender.com";
@@ -947,11 +947,11 @@ const HERRAMIENTAS_IA = [
   },
   {
     name: "enviar_link_de_pago",
-    description: "Manda el link para contratar/pagar un plan (Alerta, Inteligencia o Acompañado; codigos inicio, plus, premium) via Flow. Usalo cuando el cliente quiera pagar, mejorar de plan, o no tenga plan activo y quiera contratar.",
+    description: "Manda el link para contratar/pagar un plan (Alerta, Inteligencia, Licitaciones o Convenio Marco; codigos inicio, plus, licitaciones, premium) via Flow. Usalo cuando el cliente quiera pagar, mejorar de plan, o no tenga plan activo y quiera contratar.",
     input_schema: {
       type: "object",
       properties: {
-        plan: { type: "string", enum: ["inicio", "plus", "premium"], description: "El plan que quiere contratar" },
+        plan: { type: "string", enum: ["inicio", "plus", "licitaciones", "premium"], description: "El plan que quiere contratar" },
         email: { type: "string", description: "Correo del cliente, para asociar el pago" },
         nombre: { type: "string", description: "Nombre o empresa del cliente" },
       },
@@ -2428,7 +2428,7 @@ app.post("/admin/plan", async (req, res) => {
   const { token, correo, plan, activo, confirmar } = req.body || {};
   if (!token || !correo) return res.status(400).json({ ok: false, motivo: "Falta el token o el correo." });
   const planNuevo = String(plan || "");
-  if (!["", "inicio", "plus", "premium"].includes(planNuevo)) {
+  if (!["", "inicio", "plus", "licitaciones", "premium"].includes(planNuevo)) {
     return res.status(400).json({ ok: false, motivo: "Plan inválido." });
   }
   try {

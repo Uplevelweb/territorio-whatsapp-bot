@@ -854,7 +854,7 @@ PLANES:
 - Plan Alerta: $19.999/mes + IVA (precio de lanzamiento)
 - Plan Inteligencia: $49.999/mes + IVA (hasta 300 análisis al mes con Terri)
 - Plan Acompañado: $199.999/mes + IVA (análisis ilimitados con Terri; incluye 8 horas al mes de acompañamiento estratégico, revisión de ofertas, itinerario de visitas y email marketing a tu cartera)
-- Consultoría individual de Mercado Público: sesión de 60 minutos, $24.999 (precio de lanzamiento; después $49.999). Si la piden, ofrécela y derívala a una persona del equipo.
+- Consultoría individual de Mercado Público: sesión de 60 minutos, $39.999, IVA incluido (precio de lanzamiento; antes $69.999). Si la piden, ofrécela y derívala a una persona del equipo.
 Los primeros 15 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.
 
 CÓMO DEBES CONVERSAR:

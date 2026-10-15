@@ -441,7 +441,7 @@ function menuTerritorio(telefono, sesion) {
 const TXT_CONSULTORIA =
   "🎯 *Consultoría individual de Mercado Público*\n\n" +
   "Una sesión uno a uno de *60 minutos* con quien vende al Estado todos los días. Analizamos tus cierres, tu competencia, tus precios y tus márgenes, y determinamos juntos por qué no adjudicas y qué necesitas para mejorar.\n\n" +
-  "💰 *$24.999* por sesión _(precio de lanzamiento; después $49.999)_\n" +
+  "💰 *$39.999* por sesión, IVA incluido _(precio de lanzamiento; antes $69.999)_\n" +
   "Sin cobros ocultos ni comisiones.";
 
 function menuConsultoria(telefono, sesion) {
@@ -855,7 +855,7 @@ PLANES:
 - Plan Inteligencia: $49.999/mes + IVA (hasta 300 análisis al mes con Terri)
 - Plan Acompañado: $199.999/mes + IVA (análisis ilimitados con Terri; incluye 8 horas al mes de acompañamiento estratégico, revisión de ofertas, itinerario de visitas y email marketing a tu cartera)
 - Consultoría individual de Mercado Público: sesión de 60 minutos, $24.999 (precio de lanzamiento; después $49.999). Si la piden, ofrécela y derívala a una persona del equipo.
-Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.
+Los primeros 15 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.
 
 CÓMO DEBES CONVERSAR:
 - Natural, cercano, en español NEUTRO -sin modismos regionales de ningún
@@ -1663,11 +1663,12 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   if (id === "duda_precio") {
     await textoA(telefono,
       "💰 *Planes de Territorio*\n\n" +
-      "• *Plan Alerta* — $19.999/mes + IVA _(precio de lanzamiento)_\n" +
-      "• *Plan Inteligencia* — $49.999/mes + IVA _(hasta 300 análisis al mes con Terri)_\n" +
-      "• *Plan Acompañado* — $199.999/mes + IVA _(análisis ilimitados con Terri; incluye 8 horas al mes de acompañamiento estratégico)_\n\n" +
-      "🎯 *Consultoría individual* (60 min) — $24.999 por sesión\n\n" +
-      "Los primeros 14 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.");
+      "• *Plan Alerta* — $19.999/mes, IVA incluido _(precio de lanzamiento)_\n" +
+      "• *Plan Inteligencia* — $49.999/mes, IVA incluido _(hasta 300 análisis al mes con Terri)_\n" +
+      "• *Plan Licitaciones* — $99.999/mes, IVA incluido _(hasta 600 análisis al mes con Terri)_\n" +
+      "• *Plan Convenio Marco* — desde $299.999/mes, IVA incluido _(hasta 1.000 análisis al mes con Terri)_\n\n" +
+      "🎯 *Consultoría individual* (60 min) — $39.999 por sesión, IVA incluido\n\n" +
+      "Los primeros 15 días son gratis, sin tarjeta y sin cobros ocultos ni comisiones.");
     return menuSeguir(telefono, sesion);
   }
 
@@ -1691,7 +1692,11 @@ async function manejarInteractivo(telefono, sesion, interactivo) {
   // Opciones del menu de entrada (18-09-2026) -------------------------------
   if (id === "menu_territorio") return menuTerritorio(telefono, sesion);
   if (id === "menu_consultoria") return menuConsultoria(telefono, sesion);
-  if (id === "consultoria_reservar") return iniciarUplevel(telefono, sesion, "Consultoría individual de Mercado Público ($24.999 CLP, sesión de 60 min)");
+  if (id === "consultoria_reservar") {
+    await textoA(telefono,
+      "🎯 Para reservar tu sesión de 60 minutos paga aquí (tarjeta o transferencia, $39.999 IVA incluido):\n" + "https://www.flow.cl/uri/7bRQqr4Mg" + "\n\nApenas se confirme el pago te escribimos por este mismo chat para coordinar el día y la hora.");
+    return menuSeguir(telefono, sesion);
+  }
   if (id === "menu_otra") return menuOtraConsulta(telefono, sesion);
   if (id === "menu_inicio") { sesion.paso = "inicio"; return menuPrincipal(telefono); }
   if (id === "menu_web") return iniciarUplevel(telefono, sesion, "Página web o sistema (SaaS) a medida");
@@ -1857,6 +1862,22 @@ app.post("/flow/callback", express.urlencoded({ extended: true }), async (req, r
 //
 // Que un correo pague no depende de conversar por WhatsApp: por eso NO
 // redirige a WhatsApp en ningun caso, solo a Flow o a una pagina de error.
+// 15-10-2026: pagina de contratacion para el catalogo de WhatsApp Business.
+// Un producto del catalogo solo admite un link fijo, y la suscripcion necesita
+// el correo para registrar la tarjeta: esta pagina lo pide y sigue a /pagar.
+const PLANES_CATALOGO = {
+  inicio: ["Plan Alerta", "$19.999 al mes, IVA incluido"],
+  plus: ["Plan Inteligencia", "$49.999 al mes, IVA incluido"],
+  licitaciones: ["Plan Licitaciones", "$99.999 al mes, IVA incluido"],
+  premium: ["Plan Convenio Marco", "Desde $299.999 al mes, IVA incluido"],
+};
+app.get("/contratar", (req, res) => {
+  const plan = String(req.query.plan || "").trim().toLowerCase();
+  const datos = PLANES_CATALOGO[plan];
+  if (!datos) return res.status(404).send("Plan no encontrado.");
+  res.set("Content-Type", "text/html; charset=utf-8").send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Contratar ${datos[0]} · Territorio</title><style>body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:#f7f9fc;color:#1e293b;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}main{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:28px;max-width:420px;width:100%;box-shadow:0 8px 24px rgba(27,58,92,.08)}h1{color:#1B3A5C;font-size:1.3rem;margin:0 0 4px}p{color:#5b6b7c;margin:0 0 18px}label{display:block;font-weight:600;font-size:.9rem;margin:12px 0 4px}input{width:100%;box-sizing:border-box;padding:11px;border:1px solid #cbd5e1;border-radius:8px;font-size:1rem}button{margin-top:20px;width:100%;padding:13px;border:0;border-radius:8px;background:#E8944A;color:#fff;font-weight:700;font-size:1rem;cursor:pointer}small{display:block;margin-top:12px;color:#5b6b7c}</style></head><body><main><h1>${datos[0]}</h1><p>${datos[1]}</p><form action="/pagar" method="get"><input type="hidden" name="plan" value="${plan}"><label for="nombre">Nombre</label><input id="nombre" name="nombre" required><label for="email">Correo</label><input id="email" name="email" type="email" required><button type="submit">Continuar al pago</button></form><small>Pagas con tarjeta en Flow, plataforma de pagos segura.</small></main></body></html>`);
+});
+
 app.get("/pagar", async (req, res) => {
   const email = String(req.query.email || "").trim().toLowerCase();
   const nombre = String(req.query.nombre || "").trim();

@@ -1349,7 +1349,11 @@ async function manejarTexto(telefono, sesion, texto) {
   // Si escribe en vez de tocar la lista de rubros, se le recuerda tocarla.
   if (sesion.paso === "multi_rubros") return procesarMulti(telefono, sesion, texto);
   if (sesion.paso === "elegir_familia" || sesion.paso === "elegir_mas_rubros") {
-    return textoA(telefono, "Elige una opción tocando la lista o los botones de arriba 👆. Si lo tuyo no aparece, toca *Otro (lo escribo)*.");
+    // 26-10-2026: antes solo decia «toca los botones de arriba» (y el cliente no los veia). Ahora se REPITE
+    // la ultima pregunta con sus opciones, como en el resto del bot (regla del 11-10-2026).
+    const aviso = "Elige una opción de la lista (toca el número). Si lo tuyo no aparece, elige *Otro (lo escribo)*:";
+    if (ultimoPrompt.get(telefono) || sesion.ultimo) return repetirUltimo(telefono, sesion, aviso);
+    return menuFamilias(telefono, sesion);
   }
 
   if (sesion.paso === "pedir_palabras") {

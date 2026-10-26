@@ -160,6 +160,61 @@ async function sesionDe(telefono) {
   return sesion;
 }
 
+// 25-10-2026 (pedido de Serling): si se elimina un suscriptor o se le borra/cambia el numero, el bot
+// no debe seguir tratando a ese telefono como el cliente de antes. La base ya borra la conversacion
+// guardada (migracion 019, trigger), pero la memoria de ESTE servidor no la alcanza el trigger, y una
+// sesion cargada antes del borrado seguiria viva. Por eso, antes de seguir una sesion "de cliente"
+// se comprueba que ese cliente siga existiendo; si no, empieza de cero como un contacto nuevo.
+// Falla abierto: si Supabase no responde, la sesion sigue como estaba (mejor eso que resetear a todos).
+const ultimaRevision = new Map(); // telefono -> ms de la ultima comprobacion (evita consultar en cada mensaje)
+const SEGUNDOS_ENTRE_REVISIONES = 30;
+
+async function numeroRegistrado(telefono) {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_numero_registrado`, {
+      method: "POST",
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_telefono: telefono }),
+    });
+    if (!r.ok) return null;
+    return await r.json(); // true / false
+  } catch (e) {
+    console.error("No se pudo comprobar el numero:", e);
+    return null;
+  }
+}
+
+async function reiniciarSesion(telefono, motivo) {
+  console.log(`🧹 Sesion de ${telefono} reiniciada: ${motivo}`);
+  ultimoPrompt.delete(telefono);
+  menuPendiente.delete(telefono);
+  ultimaRevision.delete(telefono);
+  const nueva = { paso: "", datos: {}, historial: [] };
+  sesiones.set(telefono, nueva);
+  await guardarConversacion(telefono, nueva);
+  return nueva;
+}
+
+async function revalidarSesion(telefono, sesion) {
+  const eraCliente = Boolean(sesion.alerta || sesion.datos?.clienteIdentificado);
+  if (!eraCliente) return sesion;
+  const ahora = Date.now();
+  if (ahora - (ultimaRevision.get(telefono) || 0) < SEGUNDOS_ENTRE_REVISIONES * 1000) return sesion;
+  ultimaRevision.set(telefono, ahora);
+
+  // Recibio alertas por WhatsApp => su numero estaba registrado: tiene que seguir estandolo.
+  if (sesion.alerta && (await numeroRegistrado(telefono)) === false) {
+    return reiniciarSesion(telefono, "el numero ya no pertenece a ningun suscriptor");
+  }
+  // Se identifico como cliente (RUT o correo): esa cuenta tiene que seguir existiendo.
+  const correo = sesion.datos?.clienteIdentificado?.email;
+  if (correo) {
+    const c = await identificarCliente(correo);
+    if (c && c.encontrado === false) return reiniciarSesion(telefono, "la cuenta con la que se identifico ya no existe");
+  }
+  return sesion;
+}
+
 // --- Enviar mensajes -------------------------------------------------------
 async function enviar(cuerpo) {
   // Devuelve {ok, estado, detalle, id}: quien necesite saber si salio de verdad
@@ -281,10 +336,29 @@ function textoNumerado(texto, opciones, pie) {
   return texto + "\n\n" + lineas.join("\n") + "\n\n" + pie;
 }
 
-function listaNumA(telefono, texto, opciones) {
+// WhatsApp rechaza un texto de mas de 4.096 caracteres. Con el detalle diario SIN tope de
+// oportunidades (25-10-2026) la lista puede no caber en un mensaje: se corta por lineas en varios
+// mensajes, en orden, y el ultimo lleva el pie con la instruccion. La numeracion sigue corrida.
+const MAX_CARACTERES_MENSAJE = 3500;
+function partirEnMensajes(texto) {
+  const partes = [];
+  let actual = "";
+  for (const linea of texto.split("\n")) {
+    if (actual && (actual.length + linea.length + 1) > MAX_CARACTERES_MENSAJE) { partes.push(actual); actual = ""; }
+    actual += (actual ? "\n" : "") + linea;
+  }
+  if (actual) partes.push(actual);
+  return partes;
+}
+
+async function listaNumA(telefono, texto, opciones) {
   menuPendiente.set(telefono, opciones.map(o => o.id));
   ultimoPrompt.set(telefono, { tipo: "lista", texto, opciones });
-  return textoA(telefono, textoNumerado(texto, opciones, "👉 Responde con el *número* de tu opción."));
+  const completo = textoNumerado(texto, opciones, "👉 Responde con el *número* de tu opción.");
+  if (completo.length <= MAX_CARACTERES_MENSAJE) return textoA(telefono, completo);
+  let ultimo;
+  for (const parte of partirEnMensajes(completo)) ultimo = await textoA(telefono, parte);
+  return ultimo;
 }
 
 function botonesA(telefono, texto, botones) {
@@ -1566,8 +1640,8 @@ async function mostrarMejoresDeHoy(telefono, sesion) {
   if (!mejores.length) {
     return textoA(telefono, "No tengo el detalle de hoy a mano 🙈. Ábrelo completo en tu panel: " + URL_PANEL);
   }
-  await mostrarListaMejores(telefono, sesion, `🏆 *Las mejores de hoy*\nResponde con el *número* para ver el detalle de una.`);
-  return textoA(telefono, `¿Quieres más oportunidades o el análisis de Terri? Están completas en tu panel y en tu correo: ${URL_PANEL}`);
+  await mostrarListaMejores(telefono, sesion, `📋 *Tus ${mejores.length} oportunidades de hoy* (las mismas del correo, la de mejor encaje primero)\nResponde con el *número* para ver el detalle de una.`);
+  return textoA(telefono, `Para analizarlas con Terri, ver quién compite y decidir en cuáles participar, abre tu panel desde el computador: ${URL_PANEL}`);
 }
 async function detalleOportunidad(telefono, sesion, i) {
   const m = ((sesion.alerta && sesion.alerta.mejores) || [])[i];
@@ -1774,7 +1848,7 @@ app.post("/webhook", async (req, res) => {
 
     const telefono = mensaje.from;
     if (superaLimite(telefono)) { console.error(`⚠️ ${telefono} supero el tope de mensajes por minuto; se ignora.`); return; }
-    const sesion = await sesionDe(telefono);
+    const sesion = await revalidarSesion(telefono, await sesionDe(telefono));
     if (!ultimoPrompt.has(telefono) && sesion.ultimo) ultimoPrompt.set(telefono, sesion.ultimo);
     console.log(`📩 Mensaje de ${telefono} (tipo: ${mensaje.type}, paso: ${sesion.paso})`);
 
@@ -1785,7 +1859,7 @@ app.post("/webhook", async (req, res) => {
     } else if (mensaje.type === "button") {
       // Boton de respuesta rapida de una PLANTILLA (llega como "button", no como "interactive").
       const clave = String(mensaje.button?.payload || mensaje.button?.text || "").toLowerCase();
-      if (/ver_mejores|ver las mejores/.test(clave)) await mostrarMejoresDeHoy(telefono, sesion);
+      if (/ver_mejores|ver las mejores|ver_detalle|ver detalle/.test(clave)) await mostrarMejoresDeHoy(telefono, sesion);
       else await repetirUltimo(telefono, sesion, "Por ahora solo entiendo texto y los botones 🙂");
     } else {
       await repetirUltimo(telefono, sesion, "Por ahora solo entiendo texto y los botones 🙂");
@@ -1934,7 +2008,8 @@ app.post("/tareas/enviar-alerta-whatsapp", async (req, res) => {
     if (r.ok && conResumen && Array.isArray(mejores)) {
       // Lo que se responde al tocar «Ver las mejores»: queda en la sesion del cliente.
       const ses = await sesionDe(telefono);
-      ses.alerta = { fecha: new Date().toISOString(), mejores: mejores.slice(0, 10) };
+      // Sin tope (25-10-2026): lo que llega al correo llega tambien aqui; solo un techo de seguridad.
+      ses.alerta = { fecha: new Date().toISOString(), mejores: mejores.slice(0, 200) };
       await guardarConversacion(telefono, ses);
     }
     const estado = r.ok ? "enviado" : (r.estado === "sin_plantilla" ? "sin_plantilla" : "error");
@@ -1960,6 +2035,64 @@ async function registrarEnvioWhatsapp(telefono, tipo, estado, detalle, waId) {
     console.error("No se pudo registrar el envio de WhatsApp en Supabase:", error);
   }
 }
+
+// 25-10-2026 (pedido de Serling): "cuando lo borramos de la lista de suscriptores tambien se borre de
+// Flow y de nuestro cobro automatico". El boton del panel ya cancela en Flow antes de borrar, pero un
+// borrado directo en la base dejaba la suscripcion cobrando. Ahora la base anota una orden por cada
+// suscriptor borrado que tenia Flow (migracion 020) y el reloj llama aca cada 15 minutos.
+async function cancelarEnFlow(ord) {
+  // Devuelve { ok, error }. Cancelar algo ya cancelado cuenta como exito.
+  try {
+    if (ord.flow_subscription_id) {
+      const r = await llamarFlow("/subscription/cancel", { subscriptionId: ord.flow_subscription_id, at_period_end: 0 }, "POST");
+      if (!r) {
+        const est = await llamarFlow("/subscription/get", { subscriptionId: ord.flow_subscription_id }, "GET");
+        // Flow responde error al cancelar una suscripcion ya cerrada (0 = finalizada, 4 = cancelada).
+        if (!(est && [0, 4].includes(Number(est.status)))) {
+          return { ok: false, error: "Flow no confirmó la cancelación de la suscripción" };
+        }
+      }
+    }
+    let aviso = null;
+    if (ord.flow_customer_id) {
+      const c = await llamarFlow("/customer/delete", { customerId: ord.flow_customer_id }, "POST");
+      // Igual que en el boton del panel: si no se puede quitar el cliente (tarjeta), no frena lo importante,
+      // que es que ya no se cobre.
+      if (!c) aviso = "Suscripción cancelada; no se pudo borrar el cliente (tarjeta) en Flow";
+    }
+    return { ok: true, error: aviso };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e).slice(0, 300) };
+  }
+}
+
+app.get("/tareas/cancelar-flow-huerfanos", async (req, res) => {
+  if (!claveTareaOk(req)) return res.sendStatus(403);
+  try {
+    const lista = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_flow_cancelaciones_pendientes`, {
+      method: "POST",
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+      body: "{}",
+    }).then(r => (r.ok ? r.json() : null));
+    if (!Array.isArray(lista)) return res.status(502).json({ ok: false, motivo: "No se pudo leer la cola." });
+
+    let hechas = 0, fallidas = 0;
+    for (const ord of lista) {
+      const r = await cancelarEnFlow(ord);
+      await fetch(`${SUPABASE_URL}/rest/v1/rpc/bot_flow_cancelacion_marcar`, {
+        method: "POST",
+        headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ p_id: ord.id, p_ok: r.ok, p_error: r.error }),
+      }).catch(e => console.error("No se pudo marcar la cancelacion de Flow:", e));
+      if (r.ok) hechas++; else { fallidas++; console.error(`❌ Flow: no se pudo cancelar ${ord.correo || ord.id}: ${r.error}`); }
+    }
+    // Una orden que ya agoto sus intentos hay que mirarla a mano: se avisa fuerte en el registro.
+    res.json({ ok: true, hechas, fallidas });
+  } catch (e) {
+    console.error("Error en /tareas/cancelar-flow-huerfanos:", e);
+    res.sendStatus(500);
+  }
+});
 
 // Revision diaria de morosidad: el reloj de Supabase (pg_cron) llama aca una
 // vez al dia. Se le pregunta a Flow, plan por plan, cuales cobros estan

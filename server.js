@@ -195,10 +195,24 @@ async function reiniciarSesion(telefono, motivo) {
   return nueva;
 }
 
+// 26-10-2026: un registro (o menu) que quedo a medias HACE HORAS no se retoma como si nada: el contacto vuelve a escribir
+// y recibe el saludo de Terri con las 3 opciones (Alertas, Consultoria, Otra consulta/soporte). Antes, un numero que
+// volvia tras horas seguia atrapado en «elige un rubro» y respondia con un aviso que no tenia sentido.
+const HORAS_SESION_A_MEDIAS = 3;
+
 async function revalidarSesion(telefono, sesion) {
   const eraCliente = Boolean(sesion.alerta || sesion.datos?.clienteIdentificado);
-  if (!eraCliente) return sesion;
   const ahora = Date.now();
+  if (!eraCliente) {
+    const aMedias = sesion.paso && !["derivado", "confirmar_soporte"].includes(sesion.paso) && !sesion.derivado;
+    if (aMedias && (!sesion.ultimoMensaje || ahora - sesion.ultimoMensaje > HORAS_SESION_A_MEDIAS * 3600 * 1000)) {
+      const nueva = await reiniciarSesion(telefono, "registro a medias de hace horas: empieza de nuevo");
+      nueva.ultimoMensaje = ahora;
+      return nueva;
+    }
+    sesion.ultimoMensaje = ahora;
+    return sesion;
+  }
   if (ahora - (ultimaRevision.get(telefono) || 0) < SEGUNDOS_ENTRE_REVISIONES * 1000) return sesion;
   ultimaRevision.set(telefono, ahora);
 
@@ -1247,7 +1261,7 @@ async function manejarTexto(telefono, sesion, texto) {
     if (String(sesion.paso).startsWith("pedir_")) menuPendiente.delete(telefono);
     // Regla de Serling: la conversacion sigue la ultima pregunta; si la respuesta no calza, se REPITE esa
     // pregunta (no se vuelve al menu de arriba). «hola»/«menu» siguen siendo la salida de emergencia.
-    else if (!/^(hola|menu|menú|buenas|inicio)\b/i.test(t)) return repetirUltimo(telefono, sesion, "No te entendí del todo 🙂");
+    else if (!(t === "menu" || t === "menú" || esSaludo(t))) return repetirUltimo(telefono, sesion, "No te entendí del todo 🙂");
   }
 
   // "hola"/"menu" siempre reinician la conversacion, sea cual sea el paso en
@@ -1262,9 +1276,14 @@ async function manejarTexto(telefono, sesion, texto) {
   // el cruce y entra directo a la rama que corresponde. Si no, se muestra
   // el menu de entrada completo (ver menuPrincipal). `!sesion.paso` cubre
   // una conversacion recien creada cuyo primer mensaje no dice "hola".
-  const quiereReiniciar = !sesion.paso || ((t === "menu" || esSaludo(t)) &&
-    (sesion.paso === "derivado" || (["inicio", "menu"].includes(sesion.paso) && !menuPendiente.has(telefono))));
+  // 26-10-2026: un saludo o "menu" reinicia desde CUALQUIER paso (salvo cuando se escribe un dato libre).
+  // Antes, un suscriptor que quedo a medio registro (elegir_familia) escribia "Buen dia" y el bot le
+  // repetia una lista vieja ("Las mejores de hoy") con el aviso de elegir rubro.
+  const quiereReiniciar = !sesion.paso || ((t === "menu" || t === "menú" || esSaludo(t)) && !PASOS_LIBRES.includes(sesion.paso));
   if (quiereReiniciar) {
+    menuPendiente.delete(telefono);
+    ultimoPrompt.delete(telefono);
+    sesion.ultimo = null;
     sesion.historial = [];
     const origen = detectarOrigen(texto);
     if (origen === "territorio") return menuTerritorio(telefono, sesion);

@@ -1859,7 +1859,7 @@ app.post("/webhook", async (req, res) => {
     } else if (mensaje.type === "button") {
       // Boton de respuesta rapida de una PLANTILLA (llega como "button", no como "interactive").
       const clave = String(mensaje.button?.payload || mensaje.button?.text || "").toLowerCase();
-      if (/ver_mejores|ver las mejores|ver_detalle|ver detalle/.test(clave)) await mostrarMejoresDeHoy(telefono, sesion);
+      if (/ver_mejores|ver las mejores|ver_detalle|ver detalle|ver_lista|ver la lista/.test(clave)) await mostrarMejoresDeHoy(telefono, sesion);
       else await repetirUltimo(telefono, sesion, "Por ahora solo entiendo texto y los botones 🙂");
     } else {
       await repetirUltimo(telefono, sesion, "Por ahora solo entiendo texto y los botones 🙂");
